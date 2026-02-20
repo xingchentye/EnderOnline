@@ -32,9 +32,11 @@ public class PlatformHelper {
      * @return 当前检测到的操作系统枚举值
      */
     public static OS getOS() {
-        String osName = System.getProperty("os.name").toLowerCase(Locale.ROOT);
+        String osName = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        String vendor = System.getProperty("java.vendor", "").toLowerCase(Locale.ROOT);
+        String vmVendor = System.getProperty("java.vm.vendor", "").toLowerCase(Locale.ROOT);
         
-        if (System.getProperty("java.vendor").toLowerCase().contains("android") || osName.contains("android")) {
+        if (vendor.contains("android") || vmVendor.contains("android") || osName.contains("android")) {
             return OS.ANDROID;
         }
         
@@ -79,7 +81,7 @@ public class PlatformHelper {
         if (os == OS.WINDOWS) {
             if (arch == Arch.X86_64) return "easytier-windows-x86_64-v2.4.5.zip";
             return "easytier-windows-i686-v2.4.5.zip";
-        } else if (os == OS.LINUX) {
+        } else if (os == OS.LINUX || os == OS.ANDROID) {
             if (arch == Arch.X86_64) return "easytier-linux-x86_64-v2.4.5.zip";
             if (arch == Arch.ARM64) return "easytier-linux-aarch64-v2.4.5.zip";
         } else if (os == OS.MACOS) {

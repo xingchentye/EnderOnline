@@ -1,18 +1,20 @@
 package com.endercore.core.easytier;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.List;
 import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.multiplayer.ender.logic.PlatformHelper;
 
 /**
  * EasyTier 管理器类。
@@ -172,7 +174,6 @@ public class EasyTierManager {
                 
                 Path executable = installDir.resolve(isWindows() ? "easytier-core.exe" : "easytier-core");
                 
-                
                 if (!Files.exists(executable)) {
                      try (var stream = Files.walk(installDir, 2)) {
                          Path found = stream.filter(p -> p.getFileName().toString().equals(isWindows() ? "easytier-core.exe" : "easytier-core"))
@@ -181,6 +182,23 @@ public class EasyTierManager {
                              executable = found;
                          }
                      }
+                }
+
+                if (!isWindows()) {
+                    executable.toFile().setExecutable(true);
+                    if (PlatformHelper.getOS() == PlatformHelper.OS.ANDROID || !executable.toFile().canExecute()) {
+                        LOGGER.info("Android detected or execution permission denied. Copying to temp directory...");
+                        try {
+                            Path tmpDir = Paths.get(System.getProperty("java.io.tmpdir"));
+                            Path tmpExe = tmpDir.resolve(executable.getFileName());
+                            Files.copy(executable, tmpExe, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                            tmpExe.toFile().setExecutable(true);
+                            executable = tmpExe;
+                            LOGGER.info("Executable copied to: {}", executable);
+                        } catch (Exception e) {
+                            LOGGER.warn("Failed to copy executable to temp directory", e);
+                        }
+                    }
                 }
                 
                 runner = new EasyTierRunner(executable);
