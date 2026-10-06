@@ -613,35 +613,8 @@ public class EnderApiClient {
      * @return 已完成、结果为状态 JSON 字符串的 Future，永不为 null
      */
     public static CompletableFuture<String> getState() {
-        JsonObject json = new JsonObject();
-        
-        json.addProperty("status", currentState.name());
-        
-        if (currentState == State.HOSTING) {
-             json.addProperty("state", "host-ok");
-             json.addProperty("room", currentRoom);
-
-             JsonArray profileArray = profileRegistry.toProfilesJson();
-             if (profileArray.size() > 0) {
-                 json.add("profiles", profileArray);
-                 json.add("players", ProfileRegistry.toPlayersJson(profileArray));
-             }
-        } else if (currentState == State.JOINING) {
-             json.addProperty("state", "guest-ok");
-             json.addProperty("room", currentRoom);
-             JsonArray profileArray = profileRegistry.toProfilesJson();
-             if (profileArray.size() > 0) {
-                 json.add("profiles", profileArray);
-                 json.add("players", ProfileRegistry.toPlayersJson(profileArray));
-             }
-        } else if (currentState == State.HOSTING_STARTING) {
-             json.addProperty("state", "host-starting");
-        } else if (currentState == State.JOINING_STARTING) {
-             json.addProperty("state", "guest-starting");
-        } else if (currentState == State.ERROR) {
-             json.addProperty("error", lastError);
-        }
-        
+        JsonObject json = RoomStateJson.render(
+                currentState.name(), currentRoom, lastError, profileRegistry.toProfilesJson());
         return CompletableFuture.completedFuture(json.toString());
     }
 
