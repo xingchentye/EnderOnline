@@ -62,6 +62,10 @@ public class MinecraftEnder {
         // 只能通过 PlatformConfig 接口读写设置。
         com.multiplayer.ender.client.PlatformConfigHolder.install(
                 new com.multiplayer.ender.client.NeoForgePlatformConfig());
+
+        // 注入提示实现：共享代码不得引用 ClientSetup，只能通过 UserNotifier 接口发提示。
+        com.multiplayer.ender.client.UserNotifierHolder.install(
+                new com.multiplayer.ender.client.NeoForgeUserNotifier());
     }
 
     /**
