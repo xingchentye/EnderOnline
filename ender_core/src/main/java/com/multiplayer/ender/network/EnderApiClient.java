@@ -53,10 +53,10 @@ import com.multiplayer.ender.logic.PortAllocator;
  * 设计约束：
  * 1. 全部状态都是静态的，因此本类在单个 JVM 内只能表达一个房间；多房间或同时主持与加入
  *    在结构上不可表达。
- * 2. 状态字段的可变性没有统一策略：一部分是 volatile、一部分被 ROOM_STATE_LOCK 保护、
- *    还有相当一部分（currentState、currentRoom、lastError、dynamicPort、roomManagementState）
- *    既非 volatile 也无锁。跨线程读写这些字段存在可见性延迟，不要把 getCurrentState 的返回值
- *    当作可靠的实时状态。
+ * 2. 状态字段的可变性没有统一策略：一部分是 volatile，还有相当一部分（currentState、currentRoom、
+ *    lastError、dynamicPort）既非 volatile 也无锁。跨线程读写这些字段存在可见性延迟，
+ *    不要把 getCurrentState 的返回值当作可靠的实时状态。
+ *    房间管理状态已迁至 RoomStateStore，由该类自行加锁保护。
  * 3. lastError 存的是面向开发者的原始异常消息，不得直接展示在 UI 上；UI 只显示错误码对应的
  *    本地化文案（ADR-07）。
  * 4. 端口存在三个互不相同的默认值：Scaffolding 服务端 13448、被托管的 MC 端口 25565、
@@ -180,7 +180,7 @@ public class EnderApiClient {
     private static volatile String lastRoomCode = "";
 
     /** 本类日志记录器，永不为 null，由 SLF4J 在类初始化时绑定。 */
-    private static final Logger LOGGER = LoggerFactory.getLogger(EnderApiClient.class);
+    static final Logger LOGGER = LoggerFactory.getLogger(EnderApiClient.class);
 
     /**
      * 局域网广播使用的动态端口。
@@ -240,26 +240,6 @@ public class EnderApiClient {
      */
     private static String lastError = "";
 
-    /**
-     * 房间管理状态的互斥锁。
-     *
-     * 永不为 null；roomManagementState 的读写与 saveRoomConfig 的快照都必须持有它。
-     */
-    private static final Object ROOM_STATE_LOCK = new Object();
-
-    /**
-     * 房间配置的持久化文件。
-     *
-     * 永不为 null，路径相对于进程工作目录：config/ender_room_config.json。
-     */
-    private static final java.io.File CONFIG_FILE = new java.io.File("config/ender_room_config.json");
-
-    /**
-     * 房间管理状态。
-     *
-     * 仅允许在持有 ROOM_STATE_LOCK 时替换或修改；初值为「默认状态合并已落盘配置」。
-     */
-    private static JsonObject roomManagementState = createDefaultRoomManagementState();
 
     /**
      * 获取当前客户端状态。
@@ -270,97 +250,8 @@ public class EnderApiClient {
         return currentState;
     }
 
-    /**
-     * 把磁盘上的房间配置合并进给定状态对象。
-     *
-     * 文件不存在时直接返回，不修改 state；解析或读失败只记录警告。
-     *
-     * @param state 要合并到的状态对象，不能为 null，会被就地修改
-     */
-    private static void loadRoomConfig(JsonObject state) {
-        if (!CONFIG_FILE.exists()) {
-            return;
-        }
-        try {
-            String content = java.nio.file.Files.readString(CONFIG_FILE.toPath());
-            JsonObject loaded = GSON.fromJson(content, JsonObject.class);
-            if (loaded != null) {
-                mergeJsonObject(state, loaded);
-            }
-        } catch (Exception e) {
-            LOGGER.warn("Failed to load room config", e);
-        }
-    }
 
-    /**
-     * 把房间管理状态落盘。
-     *
-     * 写出时会剔除 Minecraft 原生设置键，只保留白名单、黑名单、静音列表与白名单开关等
-     * 由本模组自行管理的字段。
-     * 失败只记录警告、不抛异常，因此方法返回不代表写入成功。
-     *
-     * NOTE: 必须在持有 ROOM_STATE_LOCK 的调用路径之外调用；方法内部会自行加锁快照。
-     */
-    private static void saveRoomConfig() {
-        try {
-            java.io.File parent = CONFIG_FILE.getParentFile();
-            if (parent != null && !parent.exists()) {
-                parent.mkdirs();
-            }
-            
-            JsonObject toSave = new JsonObject();
-            synchronized (ROOM_STATE_LOCK) {
-                
-                for (Map.Entry<String, JsonElement> entry : roomManagementState.entrySet()) {
-                    String key = entry.getKey();
-                    if (isMcNativeSetting(key)) {
-                        continue;
-                    }
-                    toSave.add(key, entry.getValue());
-                }
-                
-                if (roomManagementState.has("whitelist")) {
-                    toSave.add("whitelist", roomManagementState.get("whitelist"));
-                }
-                if (roomManagementState.has("blacklist")) {
-                    toSave.add("blacklist", roomManagementState.get("blacklist"));
-                }
-                if (roomManagementState.has("mute_list")) {
-                    toSave.add("mute_list", roomManagementState.get("mute_list"));
-                }
-                if (roomManagementState.has("whitelist_enabled")) {
-                    toSave.add("whitelist_enabled", roomManagementState.get("whitelist_enabled"));
-                }
-            }
-            
-            java.nio.file.Files.writeString(CONFIG_FILE.toPath(), GSON.toJson(toSave));
-        } catch (Exception e) {
-            LOGGER.warn("Failed to save room config", e);
-        }
-    }
 
-    /**
-     * 判断某个配置键是否属于 Minecraft 原生设置。
-     *
-     * 原生设置由游戏侧保存，不写入本模组的房间配置文件，因此本方法决定持久化时哪些键被跳过。
-     *
-     * NOTE: 例外清单是 allow_cheats 与 allow_pvp——它们以 allow_ 开头但确实由本模组管理。
-     *
-     * @param key 设置键名，不能为 null
-     * @return 属于原生设置返回 true，需要由本模组持久化则返回 false
-     */
-    private static boolean isMcNativeSetting(String key) {
-        return (key.startsWith("allow_") && !key.equals("allow_cheats") && !key.equals("allow_pvp")) || 
-               key.startsWith("spawn_protection") || 
-               key.startsWith("keep_inventory") || 
-               key.startsWith("fire_spread") || 
-               key.startsWith("mob_spawning") || 
-               key.startsWith("time_lock") || 
-               key.startsWith("weather_lock") || 
-               key.startsWith("respawn_") || 
-               key.startsWith("world_border_") ||
-               key.equals("last_updated"); 
-    }
 
     /**
      * 设置局域网广播使用的动态端口。
@@ -442,9 +333,7 @@ public class EnderApiClient {
      * @return 状态对象的深拷贝，永不为 null；调用方修改副本不会影响内部状态
      */
     public static JsonObject getRoomManagementStateSync() {
-        synchronized (ROOM_STATE_LOCK) {
-            return roomManagementState.deepCopy();
-        }
+        return RoomStateStore.get().snapshot();
     }
 
     /**
@@ -458,12 +347,7 @@ public class EnderApiClient {
      * @param visitorPermission 访客权限取值，允许为 null，为 null 时写入 JSON null
      */
     public static void setLocalSettings(boolean allowCheats, String visitorPermission) {
-        synchronized (ROOM_STATE_LOCK) {
-            roomManagementState.addProperty("allow_cheats", allowCheats);
-            roomManagementState.addProperty("visitor_permission", visitorPermission);
-            roomManagementState.addProperty("last_updated", System.currentTimeMillis());
-        }
-        saveRoomConfig();
+        RoomStateStore.get().applyLocalSettings(allowCheats, visitorPermission);
     }
 
     /**
@@ -472,9 +356,7 @@ public class EnderApiClient {
      * @return 已完成、结果为当前状态序列化的 Future，永不为 null
      */
     public static CompletableFuture<String> getRoomManagementState() {
-        synchronized (ROOM_STATE_LOCK) {
-            return CompletableFuture.completedFuture(roomManagementState.toString());
-        }
+        return CompletableFuture.completedFuture(RoomStateStore.get().toJson());
     }
 
     /**
@@ -490,35 +372,15 @@ public class EnderApiClient {
      * @return 已完成、无返回值的 Future，永不为 null
      */
     public static CompletableFuture<Void> updateRoomManagementState(String stateJson) {
-        if (stateJson == null) {
-            return CompletableFuture.completedFuture(null);
-        }
-        try {
-            JsonObject incoming = GSON.fromJson(stateJson, JsonObject.class);
-            if (incoming == null) {
-                return CompletableFuture.completedFuture(null);
-            }
-            synchronized (ROOM_STATE_LOCK) {
-                JsonObject next = roomManagementState.deepCopy();
-                if (incoming.has("log_entry")) {
-                    String entry = incoming.get("log_entry").getAsString();
-                    appendLogEntry(next, entry);
-                }
-                
-                String oldRemark = next.has("room_remark") ? next.get("room_remark").getAsString() : "";
-                mergeJsonObject(next, incoming);
-                String newRemark = next.has("room_remark") ? next.get("room_remark").getAsString() : "";
-                
-                if (currentState == State.HOSTING && hasDynamicPort() && !oldRemark.equals(newRemark)) {
-                    String broadcast = newRemark.isEmpty() ? "Ender Online Room" : newRemark;
-                    LanDiscovery.startBroadcaster(getPort(), broadcast);
-                }
-                
-                next.addProperty("last_updated", System.currentTimeMillis());
-                roomManagementState = next;
-                saveRoomConfig();
-            }
-        } catch (Exception ignored) {
+        // 备注变化时重启局域网广播：这是联机行为，不属于状态存储的职责，
+        // 因此由这里根据存储层的返回值决定，而不是让存储层反向调用 LanDiscovery。
+        boolean remarkChanged = RoomStateStore.get().applyUpdate(stateJson);
+        if (remarkChanged && currentState == State.HOSTING && hasDynamicPort()) {
+            String remark = RoomStateStore.get().snapshot().has("room_remark")
+                    ? RoomStateStore.get().snapshot().get("room_remark").getAsString()
+                    : "";
+            String broadcast = remark.isEmpty() ? "Ender Online Room" : remark;
+            LanDiscovery.startBroadcaster(getPort(), broadcast);
         }
         return CompletableFuture.completedFuture(null);
     }
@@ -533,15 +395,7 @@ public class EnderApiClient {
      * @param entry 日志内容，允许为 null 或空字符串，此时直接返回不做任何事
      */
     public static void appendRoomManagementLog(String entry) {
-        if (entry == null || entry.isEmpty()) {
-            return;
-        }
-        synchronized (ROOM_STATE_LOCK) {
-            JsonObject next = roomManagementState.deepCopy();
-            appendLogEntry(next, entry);
-            next.addProperty("last_updated", System.currentTimeMillis());
-            roomManagementState = next;
-        }
+        RoomStateStore.get().appendLog(entry);
     }
 
     /**
@@ -801,99 +655,8 @@ public class EnderApiClient {
         return CompletableFuture.completedFuture(json.toString());
     }
 
-    /**
-     * 创建默认的房间管理状态。
-     *
-     * 默认值同时被用作「键集合的基线」与「缺省取值」，随后会合并磁盘上已有的配置。
-     * 状态字段既包含本模组自有的管理项（白名单、静音列表等），也包含一批 Minecraft 原生设置。
-     *
-     * @return 默认状态对象，永不为 null；已在其上合并过落盘配置
-     */
-    private static JsonObject createDefaultRoomManagementState() {
-        JsonObject json = new JsonObject();
-        json.addProperty("room_name", "未命名房间");
-        json.addProperty("room_remark", "");
-        json.addProperty("visitor_permission", "可交互");
-        json.addProperty("whitelist_enabled", false);
-        json.add("whitelist", new JsonArray());
-        json.add("blacklist", new JsonArray());
-        json.add("mute_list", new JsonArray());
-        json.add("operation_logs", new JsonArray());
-        json.addProperty("allow_cheats", false);
-        json.addProperty("allow_pvp", true);
-        json.addProperty("spawn_protection", 16);
-        json.addProperty("keep_inventory", false);
-        json.addProperty("fire_spread", true);
-        json.addProperty("mob_spawning", true);
-        json.addProperty("time_lock", "cycle");
-        json.addProperty("weather_lock", false);
-        json.addProperty("respawn_x", 0);
-        json.addProperty("respawn_y", 0);
-        json.addProperty("respawn_z", 0);
-        json.addProperty("world_border_center_x", 0);
-        json.addProperty("world_border_center_z", 0);
-        json.addProperty("world_border_radius", 0);
-        json.addProperty("auto_reconnect", true);
-        json.addProperty("reconnect_retries", 3);
-        json.addProperty("host_migration", false);
-        json.addProperty("backend_version", "当前");
-        json.addProperty("update_policy", "立即");
-        json.addProperty("log_level", "INFO");
-        json.addProperty("cpu_limit", 0);
-        json.addProperty("memory_limit", 0);
-        JsonArray versions = new JsonArray();
-        versions.add("当前");
-        versions.add("备用");
-        json.add("backend_versions", versions);
-        json.addProperty("last_updated", System.currentTimeMillis());
-        
-        
-        loadRoomConfig(json);
-        
-        return json;
-    }
 
-    /**
-     * 把 source 的键值合并进 target。
-     *
-     * 覆盖语义：同名键以 source 为准。
-     * NOTE: log_entry 是控制字段而非状态字段，会被跳过，避免它被写进状态对象。
-     *
-     * @param target 目标对象，不能为 null，会被就地修改
-     * @param source 源对象，不能为 null
-     */
-    private static void mergeJsonObject(JsonObject target, JsonObject source) {
-        for (Map.Entry<String, JsonElement> entry : source.entrySet()) {
-            String key = entry.getKey();
-            if ("log_entry".equals(key)) {
-                continue;
-            }
-            JsonElement value = entry.getValue();
-            target.add(key, value);
-        }
-    }
 
-    /**
-     * 向状态对象追加一条带时间戳的操作日志。
-     *
-     * 日志列表会被裁剪到最近 20 条，因此历史记录不可靠地长期保存。
-     *
-     * @param target 目标对象，不能为 null，会被就地修改
-     * @param entry 日志内容，不能为 null
-     */
-    private static void appendLogEntry(JsonObject target, String entry) {
-        JsonArray logs = target.has("operation_logs") && target.get("operation_logs").isJsonArray()
-                ? target.getAsJsonArray("operation_logs")
-                : new JsonArray();
-        String line = System.currentTimeMillis() + " " + entry;
-        logs.add(line);
-        JsonArray trimmed = new JsonArray();
-        int start = Math.max(0, logs.size() - 20);
-        for (int i = start; i < logs.size(); i++) {
-            trimmed.add(logs.get(i));
-        }
-        target.add("operation_logs", trimmed);
-    }
 
     /**
      * 开始主持游戏并生成房间码。
@@ -965,8 +728,9 @@ public class EnderApiClient {
                     cfg.rpcPort = getPort();
                 }
                 
-                if (roomManagementState.has("log_level")) {
-                    cfg.logLevel = roomManagementState.get("log_level").getAsString();
+                JsonObject stateSnapshot = RoomStateStore.get().snapshot();
+                if (stateSnapshot.has("log_level")) {
+                    cfg.logLevel = stateSnapshot.get("log_level").getAsString();
                 }
                 
                 manager.start(cfg);
@@ -976,7 +740,7 @@ public class EnderApiClient {
 
                 
                 if (hasDynamicPort()) {
-                     String remark = roomManagementState.has("room_remark") ? roomManagementState.get("room_remark").getAsString() : "";
+                     String remark = stateSnapshot.has("room_remark") ? stateSnapshot.get("room_remark").getAsString() : "";
                      if (remark == null || remark.isEmpty()) {
                          remark = "Ender Online Room";
                      }
@@ -1395,16 +1159,13 @@ public class EnderApiClient {
     /**
      * 处理 c:room_state_sync 请求。
      *
-     * 在锁内完成序列化，保证返回的是自洽的状态快照。
+     * 序列化由 RoomStateStore 在其锁内完成，保证返回的是自洽的状态快照。
      *
      * @param req 核心请求对象，不能为 null
      * @return 状态码为 0、负载为房间状态 JSON 的响应对象，永不为 null
      */
     private static CoreResponse handleRoomStateSync(CoreRequest req) {
-        String json;
-        synchronized (ROOM_STATE_LOCK) {
-            json = roomManagementState.toString();
-        }
+        String json = RoomStateStore.get().toJson();
         return new CoreResponse(0, req.requestId(), req.kind(), json.getBytes(StandardCharsets.UTF_8));
     }
 
