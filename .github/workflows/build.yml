@@ -80,7 +80,7 @@ jobs:
           $script:InlineBaseline = @'
           {
             "generatedAt": "2026-10-07",
-            "commit": "0e19979",
+            "commit": "46ca215",
             "scope": "forge+neoforge",
             "guards": {
               "atomic-writes": { "value": 0, "target": 0, "note": "0 个文件已有原子写；0 个在 allowlist" },
@@ -91,7 +91,7 @@ jobs:
               "error-leak": { "value": 2, "target": 0, "note": "扫描 32 个 UI 文件" },
               "executor-lifecycle": { "value": 0, "target": 0, "note": "5 个文件有清理路径；0 个在 allowlist" },
               "file-size": { "value": 0, "target": 0, "note": "最大 2359 行；2 个超标文件在白名单" },
-              "format": { "value": 487, "target": 0, "note": "BOM 0 / tab 0 / 超宽 130 / 尾随空白 357" },
+              "format": { "value": 456, "target": 0, "note": "BOM 0 / tab 0 / 超宽 130 / 尾随空白 326" },
               "hardcoded-strings": { "value": 444, "target": 0, "note": "最集中: ender_common/src/main/java/com/multiplayer/ender/client/gui/EnderDashboard.java(153), ender_common/src/main/java/com/multiplayer/ender/client/gui/RoomSettingsScreen.java(25), ender_common/src/main/java/com/multiplayer/ender/client/gui/StartupScreen.java(25), forge/src/main/java/com/multiplayer/ender/client/InGameMenuHandlerForge.java(20), neoforge/src/main/java/com/multiplayer/ender/client/InGameMenuHandler.java(20)" },
               "lang-keys": { "value": 2, "target": 0, "note": "代码引用 35 个 ender.* 键" },
               "layout-constants": { "value": 5, "target": 0, "note": "扫描 32 个 UI 文件" },

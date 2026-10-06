@@ -178,7 +178,7 @@ public class EnderApiClient {
      * 取值大于 0 表示已设置，-1 表示未设置；setPort 与 clearDynamicPort 是唯二的写入点。
      */
     private static int dynamicPort = -1;
-    
+
     /**
      * 客户端状态。
      *
@@ -412,13 +412,9 @@ public class EnderApiClient {
      * @return 已完成、无返回值的 Future，永不为 null
      */
     public static CompletableFuture<Void> panic(boolean peaceful) {
-        EasyTierManager.getInstance().stop();
-        stopScaffoldingClient();
-        stopScaffoldingServer();
-        profileRegistry.reset();
+        // 复用 setIdle 的清理序列，仅额外清掉动态端口（因此局域网广播会随之中止）
+        setIdle();
         clearDynamicPort();
-        currentState = State.IDLE;
-        currentRoom = "";
         return CompletableFuture.completedFuture(null);
     }
 
@@ -490,18 +486,18 @@ public class EnderApiClient {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 EasyTierManager manager = EasyTierManager.getInstance();
-                
-                
+
+
                 if (!manager.isInitialized()) {
                     manager.initialize().join();
                 }
 
                 manager.stop();
-                
+
                 String name = "";
                 String secret = "";
-                
-                
+
+
                 if (room.matches("^U/[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$")) {
                     String raw = room.substring(2);
                     String[] parts = raw.split("-");
@@ -513,7 +509,7 @@ public class EnderApiClient {
                     lastError = "Invalid room code format";
                     return false;
                 }
-                
+
                 com.endercore.core.easytier.EasyTierConfig cfg = manager.getConfig();
                 cfg.networkName = name;
                 cfg.networkSecret = secret;
@@ -524,11 +520,11 @@ public class EnderApiClient {
                     cfg.rpcPort = getPort();
                 }
                 manager.start(cfg);
-                
-                
+
+
                 Thread.sleep(1000);
 
-                
+
                 boolean hostFound = false;
                 boolean hostSeenButNoIp = false;
                 for (int i = 0; i < 30; i++) {
@@ -555,11 +551,11 @@ public class EnderApiClient {
                     return false;
                 }
 
-                
+
                 if (hasDynamicPort()) {
                      LanDiscovery.startBroadcaster(getPort(), "Ender Online Room");
                 }
-                
+
                 currentState = State.JOINING;
                 currentRoom = room;
                 localPlayerName = player == null ? "" : player;
@@ -658,20 +654,20 @@ public class EnderApiClient {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 EasyTierManager manager = EasyTierManager.getInstance();
-                
+
                 // 检查是否初始化
                 if (!manager.isInitialized()) {
                     manager.initialize(progressCallback).join();
                 }
-                
+
                 manager.stop();
-                
-                
+
+
                 String p1 = generateRandomString(4);
                 String p2 = generateRandomString(4);
                 String p3 = generateRandomString(4);
                 String p4 = generateRandomString(4);
-                
+
                 String roomCode = "U/" + p1 + "-" + p2 + "-" + p3 + "-" + p4;
                 String networkName = "scaffolding-mc-" + p1 + "-" + p2;
                 String networkSecret = p3 + "-" + p4;
@@ -679,8 +675,8 @@ public class EnderApiClient {
                 hostedMcPort = port;
                 localPlayerName = playerName == null ? "" : playerName;
                 int serverPort = startScaffoldingServer(port, localPlayerName);
-                
-                
+
+
                 com.endercore.core.easytier.EasyTierConfig cfg = manager.getConfig();
                 cfg.networkName = networkName;
                 cfg.networkSecret = networkSecret;
@@ -690,18 +686,18 @@ public class EnderApiClient {
                 if (hasDynamicPort()) {
                     cfg.rpcPort = getPort();
                 }
-                
+
                 JsonObject stateSnapshot = RoomStateStore.get().snapshot();
                 if (stateSnapshot.has("log_level")) {
                     cfg.logLevel = stateSnapshot.get("log_level").getAsString();
                 }
-                
+
                 manager.start(cfg);
-                
-                
+
+
                 Thread.sleep(1000);
 
-                
+
                 if (hasDynamicPort()) {
                      String remark = stateSnapshot.has("room_remark") ? stateSnapshot.get("room_remark").getAsString() : "";
                      if (remark == null || remark.isEmpty()) {
@@ -709,10 +705,10 @@ public class EnderApiClient {
                      }
                      LanDiscovery.startBroadcaster(getPort(), remark);
                 }
-                
+
                 currentState = State.HOSTING;
                 currentRoom = roomCode;
-                
+
                 return roomCode;
             } catch (Exception e) {
                 LOGGER.error("Failed to start hosting", e);
@@ -857,13 +853,13 @@ public class EnderApiClient {
         if (currentState != State.JOINING) {
             return;
         }
-        
-        
+
+
         // 数据来源留在本类：名册只负责合并，不反向依赖 EasyTier。
         profileRegistry.refreshFromPeerHostnames(
                 EasyTierManager.getInstance().getPeerHostnames(), SCAFFOLDING_PREFIX);
 
-        
+
         InetSocketAddress remote = findScaffoldingRemote();
         if (remote == null) {
             LOGGER.debug("Scaffolding remote not found during poll");
@@ -893,7 +889,7 @@ public class EnderApiClient {
                 profileRegistry.replaceAllFromArray(array);
             }
 
-            
+
             CoreResponse stateResp = client.sendSync(
                     ScaffoldingProtocols.ROOM_STATE_SYNC, new byte[0], Duration.ofSeconds(10));
             if (stateResp.isOk()) {
@@ -903,7 +899,7 @@ public class EnderApiClient {
                 LOGGER.warn("Failed to sync room state: status={}", stateResp.status());
             }
 
-            
+
             CoreResponse portResp = client.sendSync(
                     ScaffoldingProtocols.SERVER_PORT, new byte[0], Duration.ofSeconds(10));
             if (portResp.isOk()) {
