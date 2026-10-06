@@ -17,7 +17,6 @@ import com.endercore.core.comm.server.CoreWebSocketServer;
 import com.endercore.core.easytier.EasyTierManager;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,12 +27,9 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -95,19 +91,15 @@ public class EnderApiClient {
     private static final String LOCAL_MACHINE_ID = UUID.randomUUID().toString();
 
     /**
-     * 当前已知的玩家资料列表。
+     * 玩家名册。
      *
-     * 永不为 null；元素可被多个线程就地修改（Profile 的字段是 volatile），
-     * 列表自身是并发安全的，但「遍历 + 修改元素」不是原子操作。
+     * 名册本身、最后活跃时间与过期清理都归 ProfileRegistry 所有；本类只负责在合适的时机
+     * 调用它，不再直接操作资料列表。
      */
-    private static final CopyOnWriteArrayList<Profile> profiles = new CopyOnWriteArrayList<>();
+    private static final ProfileRegistry profileRegistry =
+            new ProfileRegistry(LOCAL_MACHINE_ID, VENDOR);
 
-    /**
-     * 玩家资料的最后活跃时间戳（毫秒）。
-     *
-     * 永不为 null；访客超过 10 秒未上报即被 pruneGuestProfiles 清理，房主不受此限制。
-     */
-    private static final ConcurrentHashMap<String, Long> profileLastSeen = new ConcurrentHashMap<>();
+
 
     /**
      * Scaffolding 服务端，仅房主持有。
@@ -425,7 +417,7 @@ public class EnderApiClient {
         EasyTierManager.getInstance().stop();
         stopScaffoldingClient();
         stopScaffoldingServer();
-        resetProfiles();
+        profileRegistry.reset();
         clearDynamicPort();
         currentState = State.IDLE;
         currentRoom = "";
@@ -471,7 +463,7 @@ public class EnderApiClient {
         EasyTierManager.getInstance().stop();
         stopScaffoldingClient();
         stopScaffoldingServer();
-        resetProfiles();
+        profileRegistry.reset();
         currentState = State.IDLE;
         currentRoom = "";
         return CompletableFuture.completedFuture(null);
@@ -631,18 +623,18 @@ public class EnderApiClient {
              json.addProperty("state", "host-ok");
              json.addProperty("room", currentRoom);
 
-             JsonArray profileArray = buildProfilesJson();
+             JsonArray profileArray = profileRegistry.toProfilesJson();
              if (profileArray.size() > 0) {
                  json.add("profiles", profileArray);
-                 json.add("players", buildPlayersJson(profileArray));
+                 json.add("players", ProfileRegistry.toPlayersJson(profileArray));
              }
         } else if (currentState == State.JOINING) {
              json.addProperty("state", "guest-ok");
              json.addProperty("room", currentRoom);
-             JsonArray profileArray = buildProfilesJson();
+             JsonArray profileArray = profileRegistry.toProfilesJson();
              if (profileArray.size() > 0) {
                  json.add("profiles", profileArray);
-                 json.add("players", buildPlayersJson(profileArray));
+                 json.add("players", ProfileRegistry.toPlayersJson(profileArray));
              }
         } else if (currentState == State.HOSTING_STARTING) {
              json.addProperty("state", "host-starting");
@@ -798,12 +790,10 @@ public class EnderApiClient {
      */
     private static int startScaffoldingServer(int mcPort, String hostName) {
         stopScaffoldingServer();
-        resetProfiles();
+        profileRegistry.reset();
         hostedMcPort = mcPort;
         scaffoldingPort = PortAllocator.pickAvailablePort(DEFAULT_SCAFFOLDING_PORT, DEFAULT_SCAFFOLDING_PORT);
-        Profile hostProfile = new Profile(LOCAL_MACHINE_ID, hostName, VENDOR, "HOST");
-        profiles.add(hostProfile);
-        profileLastSeen.put(LOCAL_MACHINE_ID, System.currentTimeMillis());
+        profileRegistry.upsertHost(hostName);
         CoreWebSocketServer server = CoreComm.newServer(new InetSocketAddress("0.0.0.0", scaffoldingPort), 4 * 1024 * 1024, null);
         server.register("c:ping", EnderApiClient::handlePing);
         server.register("c:protocols", EnderApiClient::handleProtocols);
@@ -816,7 +806,7 @@ public class EnderApiClient {
         scaffoldingServer = server;
         profileScheduler = Executors.newSingleThreadScheduledExecutor(
                 EnderExecutors.daemonFactory("Ender-Scaffolding-Profiles"));
-        profileScheduler.scheduleWithFixedDelay(EnderApiClient::pruneGuestProfiles, 5, 5, TimeUnit.SECONDS);
+        profileScheduler.scheduleWithFixedDelay(profileRegistry::pruneStaleGuests, 5, 5, TimeUnit.SECONDS);
         return scaffoldingPort;
     }
 
@@ -898,7 +888,9 @@ public class EnderApiClient {
         }
         
         
-        updateProfilesFromEasyTier();
+        // 数据来源留在本类：名册只负责合并，不反向依赖 EasyTier。
+        profileRegistry.refreshFromPeerHostnames(
+                EasyTierManager.getInstance().getPeerHostnames(), SCAFFOLDING_PREFIX);
 
         
         InetSocketAddress remote = findScaffoldingRemote();
@@ -931,7 +923,7 @@ public class EnderApiClient {
             
             JsonArray array = GSON.fromJson(json, JsonArray.class);
             if (array != null) {
-                updateProfilesFromArray(array);
+                profileRegistry.replaceAllFromArray(array);
             }
 
             
@@ -956,61 +948,6 @@ public class EnderApiClient {
         }
     }
 
-    /**
-     * 从 EasyTier 的对等节点主机名补全玩家名册。
-     *
-     * 主机名以宿主名前缀开头的节点被判定为房主，其余判定为访客；
-     * 公共中转节点与含 .easytier. 的基础设施节点会被跳过。
-     * 已存在的资料只刷新最后活跃时间，不覆盖姓名（房主除外）。
-     */
-    private static void updateProfilesFromEasyTier() {
-        try {
-            Map<String, String> hostnames = EasyTierManager.getInstance().getPeerHostnames();
-            for (Map.Entry<String, String> entry : hostnames.entrySet()) {
-                String id = entry.getKey();
-                String hostname = entry.getValue();
-                if (hostname == null || hostname.isBlank()) continue;
-                
-                
-                
-                
-                
-                if (hostname.startsWith("PublicServer_") || hostname.contains(".easytier.")) {
-                    continue;
-                }
-
-                String kind = "GUEST";
-                String name = hostname;
-                if (hostname.startsWith(SCAFFOLDING_PREFIX)) {
-                    kind = "HOST";
-                }
-                
-                boolean found = false;
-                for (Profile p : profiles) {
-                    if (p.machineId.equals(id)) {
-                        if ("GUEST".equals(p.kind)) {
-                            p.name = name;
-                            profileLastSeen.put(id, System.currentTimeMillis());
-                        } else if ("HOST".equals(p.kind)) {
-                             profileLastSeen.put(id, System.currentTimeMillis());
-                        }
-                        found = true;
-                        break;
-                    }
-                }
-                
-                if (!found) {
-                    
-                    String displayName = name;
-                    
-                    profiles.add(new Profile(id, displayName, "EasyTier", kind));
-                    profileLastSeen.put(id, System.currentTimeMillis());
-                }
-            }
-        } catch (Exception e) {
-            LOGGER.warn("Failed to update profiles from EasyTier", e);
-        }
-    }
 
     /**
      * 建立到房主 Scaffolding 服务端的 WebSocket 连接。
@@ -1213,10 +1150,10 @@ public class EnderApiClient {
                 return new CoreResponse(1, req.requestId(), req.kind(), new byte[0]);
             }
             if (machineId.equals(LOCAL_MACHINE_ID)) {
-                updateHostProfile(name);
+                profileRegistry.upsertHost(name);
                 return new CoreResponse(0, req.requestId(), req.kind(), new byte[0]);
             }
-            upsertGuestProfile(machineId, name, vendor);
+            profileRegistry.upsertGuest(machineId, name, vendor);
             return new CoreResponse(0, req.requestId(), req.kind(), new byte[0]);
         } catch (Exception e) {
             return new CoreResponse(1, req.requestId(), req.kind(), new byte[0]);
@@ -1230,196 +1167,9 @@ public class EnderApiClient {
      * @return 状态码为 0、负载为玩家资料 JSON 数组的响应对象，永不为 null
      */
     private static CoreResponse handlePlayerProfilesList(CoreRequest req) {
-        JsonArray array = buildProfilesJson();
+        JsonArray array = profileRegistry.toProfilesJson();
         byte[] payload = array.toString().getBytes(StandardCharsets.UTF_8);
         return new CoreResponse(0, req.requestId(), req.kind(), payload);
     }
 
-    /**
-     * 更新或创建房主资料。
-     *
-     * 只匹配本机标识且 kind 为 HOST 的条目；房主不存在时直接补建。
-     *
-     * @param name 房主显示名，不能为 null
-     */
-    private static void updateHostProfile(String name) {
-        for (Profile profile : profiles) {
-            if (profile.machineId.equals(LOCAL_MACHINE_ID) && "HOST".equals(profile.kind)) {
-                profile.name = name;
-                profileLastSeen.put(LOCAL_MACHINE_ID, System.currentTimeMillis());
-                return;
-            }
-        }
-        Profile host = new Profile(LOCAL_MACHINE_ID, name, VENDOR, "HOST");
-        profiles.add(host);
-        profileLastSeen.put(LOCAL_MACHINE_ID, System.currentTimeMillis());
-    }
-
-    /**
-     * 更新或插入访客资料。
-     *
-     * 以本机标识之外的 machineId 为键；已存在则覆盖姓名、vendor 并把 kind 归正为 GUEST。
-     *
-     * @param machineId 访客的本机标识，不能为 null
-     * @param name 访客显示名，不能为 null
-     * @param vendor 访客客户端标识，允许为 null
-     */
-    private static void upsertGuestProfile(String machineId, String name, String vendor) {
-        for (Profile profile : profiles) {
-            if (profile.machineId.equals(machineId)) {
-                profile.name = name;
-                profile.vendor = vendor;
-                profile.kind = "GUEST";
-                profileLastSeen.put(machineId, System.currentTimeMillis());
-                return;
-            }
-        }
-        profiles.add(new Profile(machineId, name, vendor, "GUEST"));
-        profileLastSeen.put(machineId, System.currentTimeMillis());
-    }
-
-    /**
-     * 清理超时未上报的访客资料。
-     *
-     * 心跳窗口为 10 秒，超过即视为离线并移除；房主资料永不清理。
-     * 遍历的是名册副本，因此遍历期间的并发修改不会抛并发修改异常。
-     */
-    private static void pruneGuestProfiles() {
-        long now = System.currentTimeMillis();
-        for (Profile profile : new ArrayList<>(profiles)) {
-            if ("HOST".equals(profile.kind)) {
-                continue;
-            }
-            Long last = profileLastSeen.get(profile.machineId);
-            if (last == null || now - last > 10_000) {
-                profiles.remove(profile);
-                profileLastSeen.remove(profile.machineId);
-            }
-        }
-    }
-
-    /**
-     * 用服务端下发的资料数组整体替换本地名册。
-     *
-     * 会先清空名册与最后活跃时间表，因此这是一次全量覆盖而非合并；
-     * 缺少 machine_id 或 name 的条目被丢弃，kind 为空时按 GUEST 处理。
-     *
-     * 幂等性：本方法幂等，相同数组重复应用得到相同名册。
-     *
-     * @param array 玩家资料 JSON 数组，不能为 null
-     */
-    private static void updateProfilesFromArray(JsonArray array) {
-        profiles.clear();
-        profileLastSeen.clear();
-        for (JsonElement element : array) {
-            if (!element.isJsonObject()) {
-                continue;
-            }
-            JsonObject obj = element.getAsJsonObject();
-            String name = obj.has("name") ? obj.get("name").getAsString() : "";
-            String machineId = obj.has("machine_id") ? obj.get("machine_id").getAsString() : "";
-            String vendor = obj.has("vendor") ? obj.get("vendor").getAsString() : "";
-            String kind = obj.has("kind") ? obj.get("kind").getAsString() : "";
-            if (machineId.isBlank() || name.isBlank()) {
-                continue;
-            }
-            profiles.add(new Profile(machineId, name, vendor, kind.isBlank() ? "GUEST" : kind));
-            profileLastSeen.put(machineId, System.currentTimeMillis());
-        }
-    }
-
-    /**
-     * 构建玩家资料的 JSON 数组。
-     *
-     * 姓名为 null 或空白的资料会被跳过，因此返回值不保证与名册一一对应。
-     *
-     * @return 玩家资料 JSON 数组，永不为 null，可能为空数组
-     */
-    private static JsonArray buildProfilesJson() {
-        JsonArray array = new JsonArray();
-        for (Profile profile : profiles) {
-            if (profile.name == null || profile.name.isBlank()) {
-                continue;
-            }
-            JsonObject obj = new JsonObject();
-            obj.addProperty("name", profile.name);
-            obj.addProperty("machine_id", profile.machineId);
-            obj.addProperty("vendor", profile.vendor);
-            obj.addProperty("kind", profile.kind);
-            array.add(obj);
-        }
-        return array;
-    }
-
-    /**
-     * 从资料数组中抽取玩家名称。
-     *
-     * @param profilesArray 玩家资料 JSON 数组，不能为 null
-     * @return 玩家名称 JSON 数组，永不为 null；非对象元素与无 name 字段的元素会被跳过
-     */
-    private static JsonArray buildPlayersJson(JsonArray profilesArray) {
-        JsonArray players = new JsonArray();
-        for (JsonElement element : profilesArray) {
-            if (!element.isJsonObject()) {
-                continue;
-            }
-            JsonObject obj = element.getAsJsonObject();
-            if (!obj.has("name")) {
-                continue;
-            }
-            String name = obj.get("name").getAsString();
-            if (name != null && !name.isBlank()) {
-                players.add(name);
-            }
-        }
-        return players;
-    }
-
-    /**
-     * 清空玩家名册与最后活跃时间表。
-     *
-     * 幂等性：本方法幂等，重复调用效果相同。
-     */
-    private static void resetProfiles() {
-        profiles.clear();
-        profileLastSeen.clear();
-    }
-
-    /**
-     * 玩家资料。
-     *
-     * 供房主侧名册与状态 JSON 使用，跨线程读写：引用本身被并发容器保护，
-     * 字段用 volatile 保证可见性。
-     *
-     * 仅供 EnderApiClient 内部使用，禁止跨包引用。
-     */
-    private static final class Profile {
-
-        /** 玩家本机标识，构造后不再变化，永不为 null。 */
-        private final String machineId;
-
-        /** 玩家显示名，允许为 null（构造时不做校验）。 */
-        private volatile String name;
-
-        /** 客户端标识，不允许为 null；构造时把 null 归一化为空字符串。 */
-        private volatile String vendor;
-
-        /** 角色，取值为 HOST 或 GUEST；构造时把 null 归一化为空字符串。 */
-        private volatile String kind;
-
-        /**
-         * 构造玩家资料。
-         *
-         * @param machineId 本机标识，不能为 null
-         * @param name 显示名，允许为 null
-         * @param vendor 客户端标识，允许为 null，为 null 时归一化为空字符串
-         * @param kind 角色，允许为 null，为 null 时归一化为空字符串
-         */
-        private Profile(String machineId, String name, String vendor, String kind) {
-            this.machineId = machineId;
-            this.name = name;
-            this.vendor = vendor == null ? "" : vendor;
-            this.kind = kind == null ? "" : kind;
-        }
-    }
 }
