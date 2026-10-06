@@ -39,7 +39,6 @@ import com.endercore.core.comm.EnderExecutors;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -129,12 +128,13 @@ public final class CoreWebSocketClient implements CoreConnectionManager, CoreMes
     /** 是否由本实例主动发起关闭，用于区分正常关闭与对端断开。 */
     private volatile boolean closing;
     /**
-     * 当前重连退避时长，单位为毫秒，初始为配置的最小值，每次重连后翻倍并封顶。
+     * 重连退避策略。
      *
-     * 用原子类型而不是 volatile Duration：scheduleReconnect 是「读取再写回」的读-改-写，
-     * 超时任务与关闭回调并发触发时会丢更新（baseline-audit 的 D6），使退避策略失效。
+     * 退避状态与翻倍/封顶规则由 ReconnectPolicy 持有：该逻辑是「读—改—写」，
+     * 超时任务与关闭回调并发触发时会丢更新（baseline-audit 的 D6），
+     * 因此必须原子更新，而这份约束现在只在一个地方表达。
      */
-    private final AtomicLong dynamicBackoffMillis = new AtomicLong();
+    private final ReconnectPolicy reconnectPolicy;
     /**
      * 在途的重连任务。
      *
@@ -166,7 +166,7 @@ public final class CoreWebSocketClient implements CoreConnectionManager, CoreMes
         // 是确定的线程泄漏源（每个客户端实例泄漏一条线程）。
         this.scheduler = EnderExecutors.scheduled();
         this.codec = new CoreFrameCodec(config.maxFrameBytes());
-        this.dynamicBackoffMillis.set(config.reconnectBackoffMin().toMillis());
+        this.reconnectPolicy = new ReconnectPolicy(config.reconnectBackoffMin(), config.reconnectBackoffMax());
     }
 
     /**
@@ -458,7 +458,7 @@ public final class CoreWebSocketClient implements CoreConnectionManager, CoreMes
              */
             @Override
             public void onOpen(ServerHandshake handshakedata) {
-                dynamicBackoffMillis.set(config.reconnectBackoffMin().toMillis());
+                reconnectPolicy.reset();
                 setState(ConnectionState.CONNECTED);
                 if (connectFuture != null && !connectFuture.isDone()) {
                     connectFuture.complete(null);
@@ -624,8 +624,7 @@ public final class CoreWebSocketClient implements CoreConnectionManager, CoreMes
      * 任务句柄记录在 reconnectTask 中，供 close 取消。
      */
     private void scheduleReconnect() {
-        long backoff = dynamicBackoffMillis.get();
-        long jitter = ThreadLocalRandom.current().nextLong(0, 100);
+        long delay = reconnectPolicy.nextDelayMillis();
         reconnectTask = scheduler.schedule(() -> {
             if (closing) {
                 return;
@@ -635,30 +634,10 @@ public final class CoreWebSocketClient implements CoreConnectionManager, CoreMes
             } catch (Exception e) {
                 exceptionHandler.onConnectionError(new CoreConnectException("重连失败", e));
             }
-            // 原子翻倍：即使上一次任务尚未写回，也不会丢失本次更新
-            dynamicBackoffMillis.updateAndGet(this::nextBackoffMillis);
-        }, backoff + jitter, TimeUnit.MILLISECONDS);
+            reconnectPolicy.recordAttempt();
+        }, delay, TimeUnit.MILLISECONDS);
     }
 
-    /**
-     * 计算下一次重连退避时长（毫秒）。
-     *
-     * 计算顺序为「当前值翻倍」再「按配置上限封顶」，返回值不小于入参。
-     * 翻倍先做溢出保护再封顶：直接用乘法溢出会得到负值，导致退避变成立即重连。
-     *
-     * @param currentMillis 当前退避毫秒数，非负
-     * @return 下一次退避毫秒数，非负且不超过配置上限
-     */
-    private long nextBackoffMillis(long currentMillis) {
-        long max = config.reconnectBackoffMax().toMillis();
-        if (currentMillis >= max) {
-            return max;
-        }
-        if (currentMillis > Long.MAX_VALUE / 2L) {
-            return max;
-        }
-        return Math.min(currentMillis * 2L, max);
-    }
 
     /**
      * 启动周期性心跳。
