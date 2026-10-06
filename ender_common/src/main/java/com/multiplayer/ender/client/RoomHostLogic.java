@@ -9,16 +9,10 @@ package com.multiplayer.ender.client;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-import com.multiplayer.ender.logic.AccessControlRules;
 import com.multiplayer.ender.network.EnderApiClient;
-import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.GameRules;
-import net.minecraft.world.level.GameType;
-
-import java.util.List;
 
 /**
  * 房主端状态同步器。
@@ -33,9 +27,10 @@ import java.util.List;
  * 2. syncFromMinecraft 仅在 initialized 由 false 翻转为 true 的那一个周期执行一次；
  *    此后每个周期只做「拉取后端状态并应用」。因此运行期直接改动服务器规则不会被自动回传，
  *    除非重新进入托管状态。
- * 3. 规则写入与玩家操作已上移到 ServerRuleWriter 与 ServerPlayerActions，
- *    与 EnderDashboard 的界面生效路径共用一份实现，本类只保留薄委托。
- *    那两处的反射回退链成因是 Fabric 时期需要同时支持 Yarn 与 Mojmap 两套映射，
+ * 3. 规则写入、玩家操作与访问控制执行已分别上移到 ServerRuleWriter、ServerPlayerActions
+ *    与 ServerAccessControl，与 EnderDashboard 的界面生效路径共用一份实现；
+ *    本类只负责「从状态 JSON 取值」与「键是否存在」这两件判定工作。
+ *    那三处的反射回退链成因是 Fabric 时期需要同时支持 Yarn 与 Mojmap 两套映射，
  *    同一语义在两套映射下方法名不同：作弊权限（Yarn areCheatsAllowed /
  *    Mojmap isAllowCheatsForAllPlayers）、出生点保护（getSpawnProtectionRadius
  *    在不同版本分别挂在服务器与玩家列表上）、游戏规则字段名与时间设置。
@@ -201,36 +196,15 @@ public class RoomHostLogic {
      * @param state 房间管理状态 JSON，不能为 null；缺少 blacklist/whitelist 时按空名单处理
      */
     private static void enforceAccessControl(MinecraftServer server, JsonObject state) {
-        String hostName = "";
-        if (server.isSingleplayer()) {
-            hostName = server.getSingleplayerProfile() != null ? server.getSingleplayerProfile().getName() : null;
-        }
-
         JsonArray blacklist = state.has("blacklist") ? state.getAsJsonArray("blacklist") : new JsonArray();
         JsonArray whitelist = state.has("whitelist") ? state.getAsJsonArray("whitelist") : new JsonArray();
         String visitorPermission = state.has("visitor_permission") ? state.get("visitor_permission").getAsString() : "可交互";
 
         // 白名单是否生效沿用历史推导：名单非空即视为启用（状态 JSON 未携带独立开关）。
         boolean whitelistEnabled = whitelist.size() > 0;
-        List<ServerPlayer> players = server.getPlayerList().getPlayers();
-        for (ServerPlayer player : players) {
-            String name = player.getGameProfile().getName();
-            AccessControlRules.Outcome outcome = AccessControlRules.evaluate(
-                    blacklist, whitelist, whitelistEnabled, visitorPermission, hostName, name);
-            switch (outcome.decision()) {
-                case DISCONNECT:
-                    disconnectPlayer(player, Component.literal(outcome.reason()));
-                    break;
-                case SPECTATOR:
-                    setPlayerGameType(player, GameType.SPECTATOR);
-                    break;
-                case ADVENTURE:
-                    setPlayerGameType(player, GameType.ADVENTURE);
-                    break;
-                default:
-                    break;
-            }
-        }
+        // 判定与执行都在 ServerAccessControl，与 EnderDashboard 的界面生效路径共用一份实现。
+        ServerAccessControl.apply(server, ServerAccessControl.resolveHostName(server),
+                blacklist, whitelist, whitelistEnabled, visitorPermission);
     }
 
     /**
@@ -294,32 +268,5 @@ public class RoomHostLogic {
                 }
             }
         }
-    }
-    
-    
-    /**
-     * 断开指定玩家的连接。
-     *
-     * 连接已失效或玩家已离线时静默忽略，避免中断 tick 循环。
-     *
-     * @param player 目标玩家，不能为 null
-     * @param reason 断开原因，会展示在玩家侧，不能为 null
-     */
-    private static void disconnectPlayer(ServerPlayer player, Component reason) {
-        // 实现已上移到 ServerPlayerActions，与 EnderDashboard 共用一份。
-        ServerPlayerActions.disconnectPlayer(player, reason);
-    }
-    
-    /**
-     * 切换玩家游戏模式。
-     *
-     * 已是目标模式时直接返回；切换动作通过反射调用 setGameMode，属 ADR-03 待消除的回退链。
-     *
-     * @param player 目标玩家，不能为 null
-     * @param type 目标游戏模式，不能为 null
-     */
-    private static void setPlayerGameType(ServerPlayer player, GameType type) {
-        // 实现已上移到 ServerPlayerActions，与 EnderDashboard 共用一份。
-        ServerPlayerActions.setPlayerGameType(player, type);
     }
 }

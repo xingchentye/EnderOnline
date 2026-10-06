@@ -11,9 +11,8 @@ package com.multiplayer.ender.client.gui;
 import com.endercore.core.comm.EnderLifecycle;
 
 import com.multiplayer.ender.client.PlatformConfigHolder;
-import com.multiplayer.ender.client.ServerPlayerActions;
+import com.multiplayer.ender.client.ServerAccessControl;
 import com.multiplayer.ender.client.ServerRuleWriter;
-import com.multiplayer.ender.logic.AccessControlRules;
 import com.multiplayer.ender.logic.InputParsers;
 import com.multiplayer.ender.client.UserNotifierHolder;
 
@@ -46,7 +45,6 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.GameRules;
-import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.border.WorldBorder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -1992,45 +1990,15 @@ public class EnderDashboard extends EnderBaseScreen {
     /**
      * 对当前世界的玩家执行访问控制。
      *
-     * 房主本人始终跳过（按名称忽略大小写比较）；其余玩家按黑名单 → 白名单 → 访客权限的顺序判定，
-     * 「仅观战」转旁观者、「仅聊天」转冒险模式。
-     *
-     * 设计约束：与 {@code RoomHostLogic} 的同名逻辑是两份实现，改动需同步，P3 拆分时应合并为一处。
+     * 名单与访客权限取自本地字段，房主名取客户端当前用户；判定与执行都在
+     * {@code ServerAccessControl}，与 {@code RoomHostLogic} 的轮询路径共用一份实现。
      *
      * @param server 当前集成服务器，不能为 null
      */
     private void enforceAccessControl(IntegratedServer server) {
         String hostName = this.minecraft.getUser().getName();
-        List<ServerPlayer> players = server.getPlayerList().getPlayers();
-        for (ServerPlayer player : players) {
-            String name = player.getGameProfile().getName();
-            AccessControlRules.Outcome outcome = AccessControlRules.evaluate(
-                    blacklist, whitelist, whitelistEnabled, visitorPermission, hostName, name);
-            switch (outcome.decision()) {
-                case DISCONNECT:
-                    ServerPlayerActions.disconnectPlayer(player, Component.literal(outcome.reason()));
-                    break;
-                case SPECTATOR:
-                    ServerPlayerActions.setPlayerGameType(player, GameType.SPECTATOR);
-                    break;
-                case ADVENTURE:
-                    ServerPlayerActions.setPlayerGameType(player, GameType.ADVENTURE);
-                    break;
-                default:
-                    break;
-            }
-        }
+        ServerAccessControl.apply(server, hostName, blacklist, whitelist, whitelistEnabled, visitorPermission);
     }
-
-
-
-
-
-
-
-
-
-
     /**
      * 把当前重生点字段应用到主世界。
      *
