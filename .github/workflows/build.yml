@@ -51,7 +51,6 @@ jobs:
               'file-size' = @(
                   @{ Path = 'ender_common/src/main/java/com/multiplayer/ender/client/gui/EnderDashboard.java'; Line = 0; Reason = 'P3 拆为 5 页 + 5 VM 后删除本条（P1-c 已合并两份副本为共享版本，行数由 2583 降到 2421）' }
                   @{ Path = 'ender_core/src/main/java/com/multiplayer/ender/network/EnderApiClient.java'; Line = 0; Reason = 'P3 拆为 6 类后删除本条' }
-                  @{ Path = 'ender_core/src/main/java/com/endercore/core/comm/server/CoreRooms.java'; Line = 0; Reason = 'P3 拆为 4 类后删除本条' }
                   @{ Path = 'ender_core/src/main/java/com/endercore/core/comm/client/CoreWebSocketClient.java'; Line = 0; Reason = 'P3 拆出 ReconnectPolicy/PendingRequests/FrameDispatcher 后删除本条' }
               )
               'format' = @(
@@ -75,7 +74,7 @@ jobs:
           $script:InlineBaseline = @'
           {
             "generatedAt": "2026-10-06",
-            "commit": "ec10c51",
+            "commit": "b99d908",
             "scope": "forge+neoforge",
             "guards": {
               "atomic-writes": { "value": 0, "target": 0, "note": "0 个文件已有原子写；0 个在 allowlist" },
@@ -84,13 +83,13 @@ jobs:
               "duplicate-classes": { "value": 1, "target": 0, "note": "" },
               "empty-catch": { "value": 42, "target": 0, "note": "空块 6 / ignored 命名 35 / printStackTrace 1；9 处有 ignore-reason 或在白名单" },
               "error-leak": { "value": 2, "target": 0, "note": "扫描 32 个 UI 文件" },
-              "executor-lifecycle": { "value": 0, "target": 0, "note": "4 个文件有清理路径；0 个在 allowlist" },
-              "file-size": { "value": 0, "target": 0, "note": "最大 2422 行；3 个超标文件在白名单" },
-              "format": { "value": 515, "target": 0, "note": "BOM 0 / tab 0 / 超宽 135 / 尾随空白 380" },
+              "executor-lifecycle": { "value": 0, "target": 0, "note": "5 个文件有清理路径；0 个在 allowlist" },
+              "file-size": { "value": 0, "target": 0, "note": "最大 2422 行；2 个超标文件在白名单" },
+              "format": { "value": 511, "target": 0, "note": "BOM 0 / tab 0 / 超宽 131 / 尾随空白 380" },
               "hardcoded-strings": { "value": 449, "target": 0, "note": "最集中: ender_common/src/main/java/com/multiplayer/ender/client/gui/EnderDashboard.java(159), ender_common/src/main/java/com/multiplayer/ender/client/gui/StartupScreen.java(25), ender_common/src/main/java/com/multiplayer/ender/client/gui/RoomSettingsScreen.java(25), neoforge/src/main/java/com/multiplayer/ender/client/InGameMenuHandler.java(20), forge/src/main/java/com/multiplayer/ender/client/InGameMenuHandlerForge.java(20)" },
               "lang-keys": { "value": 2, "target": 0, "note": "代码引用 35 个 ender.* 键" },
               "layout-constants": { "value": 5, "target": 0, "note": "扫描 32 个 UI 文件" },
-              "loader-leak": { "value": 0, "target": 0, "note": "扫描 91 个文件（ender_core + ender_common）" },
+              "loader-leak": { "value": 0, "target": 0, "note": "扫描 96 个文件（ender_core + ender_common）" },
               "raw-threads": { "value": 0, "target": 6, "note": "；4 处在白名单" },
               "reflective-lookup": { "value": 31, "target": 0, "note": "最集中: RoomHostLogic.java(11), EnderDashboard.java(9), PlatformRenderers.java(7), LanShareHandler.java(2), LanShareHandlerForge.java(2)" },
               "static-state": { "value": 48, "target": 10, "note": "最集中: EnderApiClient.java(14), ClientSetup.java(6), ClientSetupForge.java(6), InGameMenuHandler.java(3), EnderDashboard.java(3)" }

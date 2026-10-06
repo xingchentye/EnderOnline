@@ -34,7 +34,6 @@ import com.endercore.core.comm.protocol.CoreResponse;
  *
  * @since 1.0
  * @see CoreWebSocketServer
- * @see CoreRooms
  */
 public final class CoreMinecraft {
     /**
