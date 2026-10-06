@@ -21,8 +21,6 @@ import com.google.gson.JsonObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -908,20 +906,15 @@ public class EnderApiClient {
             return;
         }
         try {
-            JsonObject ping = new JsonObject();
-            ping.addProperty("machine_id", LOCAL_MACHINE_ID);
-            ping.addProperty("name", localPlayerName);
-            ping.addProperty("vendor", VENDOR);
-            
-            client.sendSync("c:player_ping", ping.toString().getBytes(StandardCharsets.UTF_8), Duration.ofSeconds(10));
+            client.sendSync("c:player_ping",
+                    ScaffoldingMessages.encodePlayerPing(LOCAL_MACHINE_ID, localPlayerName, VENDOR),
+                    Duration.ofSeconds(10));
             CoreResponse resp = client.sendSync("c:player_profiles_list", new byte[0], Duration.ofSeconds(10));
             if (!resp.isOk()) {
                 LOGGER.warn("Failed to fetch profiles: status={}", resp.status());
                 return;
             }
-            String json = new String(resp.payload(), StandardCharsets.UTF_8);
-            
-            JsonArray array = GSON.fromJson(json, JsonArray.class);
+            JsonArray array = ScaffoldingMessages.decodeProfiles(resp.payload());
             if (array != null) {
                 profileRegistry.replaceAllFromArray(array);
             }
@@ -938,10 +931,10 @@ public class EnderApiClient {
             
             CoreResponse portResp = client.sendSync("c:server_port", new byte[0], Duration.ofSeconds(10));
             if (portResp.isOk()) {
-                try {
-                    java.io.DataInputStream in = new java.io.DataInputStream(new java.io.ByteArrayInputStream(portResp.payload()));
-                    remoteMcPort = in.readUnsignedShort();
-                } catch (Exception ignored) {}
+                int decodedPort = ScaffoldingMessages.decodePort(portResp.payload());
+                if (decodedPort >= 0) {
+                    remoteMcPort = decodedPort;
+                }
             }
         } catch (Exception e) {
             LOGGER.error("Error polling scaffolding server", e);
@@ -1068,14 +1061,8 @@ public class EnderApiClient {
      * @return 状态码为 0、负载为 2 字节端口号的响应对象；序列化失败时返回状态码 1 与空负载
      */
     private static CoreResponse handleServerPort(CoreRequest req) {
-        try {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            DataOutputStream out = new DataOutputStream(baos);
-            out.writeShort((short) hostedMcPort);
-            return new CoreResponse(0, req.requestId(), req.kind(), baos.toByteArray());
-        } catch (Exception e) {
-            return new CoreResponse(1, req.requestId(), req.kind(), new byte[0]);
-        }
+        return new CoreResponse(0, req.requestId(), req.kind(),
+                ScaffoldingMessages.encodePort(hostedMcPort));
     }
 
     /**
@@ -1091,17 +1078,13 @@ public class EnderApiClient {
      */
     private static CoreResponse handlePlayerPing(CoreRequest req) {
         try {
-            String body = new String(req.payload(), StandardCharsets.UTF_8);
-            JsonObject json = GSON.fromJson(body, JsonObject.class);
-            if (json == null) {
+            ScaffoldingMessages.PlayerPing ping = ScaffoldingMessages.decodePlayerPing(req.payload());
+            if (ping == null || ping.isIncomplete()) {
                 return new CoreResponse(1, req.requestId(), req.kind(), new byte[0]);
             }
-            String machineId = json.has("machine_id") ? json.get("machine_id").getAsString() : "";
-            String name = json.has("name") ? json.get("name").getAsString() : "";
-            String vendor = json.has("vendor") ? json.get("vendor").getAsString() : "";
-            if (machineId.isBlank() || name.isBlank()) {
-                return new CoreResponse(1, req.requestId(), req.kind(), new byte[0]);
-            }
+            String machineId = ping.machineId();
+            String name = ping.name();
+            String vendor = ping.vendor();
             if (machineId.equals(LOCAL_MACHINE_ID)) {
                 profileRegistry.upsertHost(name);
                 return new CoreResponse(0, req.requestId(), req.kind(), new byte[0]);
