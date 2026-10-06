@@ -35,7 +35,7 @@ import java.util.function.Consumer;
  * 线程安全性：非线程安全。currentTheme、isSystemDarkMode 与监听器表均无同步，
  * 只允许客户端渲染线程读写；跨线程调用会产生数据竞争与丢失通知。
  *
- * TODO(P3, 2026-10-06): 随 UI 抽象层迁出 ender_core，见 claude_docs/00-decisions-and-open-questions.md 的 ADR-04
+ * TODO(P3, 2026-10-06): 随 UI 抽象层迁出 ender_core，见 docs/00-decisions-and-open-questions.md 的 ADR-04
  *
  * @since 1.0
  * @see ColorPalette

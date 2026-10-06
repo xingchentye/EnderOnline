@@ -57,7 +57,7 @@ import org.slf4j.LoggerFactory;
  * 设计约束：
  * 1. 本类是**上帝类**：约 60 个方法、1700 余行，同时承担视图、状态缓存、后端轮询、
  *    房间管理状态的合并与推送，以及世界规则应用。它是 P3 拆分的首要目标。
- * 2. P3 拆分方案（见 claude_docs/04-uiux-plan.md §8）：拆成 5 个页面 + 5 个 VM——
+ * 2. P3 拆分方案（见 docs/04-uiux-plan.md §8）：拆成 5 个页面 + 5 个 VM——
  *    DashboardScreen 只留骨架/导航/权限门禁，页面为 OverviewPage、PlayersPage、PermissionsPage、
  *    WorldPage、NetworkPage，对应 OverviewVM / PlayersVM / PermissionsVM / WorldVM / NetworkVM；
  *    Screen 内不得再直接调用 EnderApiClient 静态方法，一律经 VM。
@@ -68,7 +68,7 @@ import org.slf4j.LoggerFactory;
  * 5. 布局混用两套：房间管理面板走 LinearLayout + 自适应尺寸（{@code percentWidth}/{@code adaptive*}），
  *    访客玩家列表与部分行则按像素坐标手排；改版式时不要假定只有一种机制。
  *
- * TODO(P3, 2026-09-30): 按 claude_docs/04-uiux-plan.md §8 拆分本上帝类，并删除内部反射回退链（ADR-03）
+ * TODO(P3, 2026-09-30): 按 docs/04-uiux-plan.md §8 拆分本上帝类，并删除内部反射回退链（ADR-03）
  *
  * 线程安全性：UI 字段只在客户端主线程读写；后端轮询与房间管理状态的异步回调通过
  * {@code minecraft.execute} 回到主线程后才触碰控件。静态状态跨实例共享，无同步保护。
@@ -2336,7 +2336,7 @@ public class EnderDashboard extends EnderBaseScreen {
      * @param percent 百分比，取值 0..100
      * @return 对应宽度，单位为逻辑像素
      */
-    // TODO(P5, 2026-12-31): 目前无调用点——响应式计算已定义但尚未接入各页面，接入或删除见 claude_docs/04-uiux-plan.md
+    // TODO(P5, 2026-12-31): 目前无调用点——响应式计算已定义但尚未接入各页面，接入或删除见 docs/04-uiux-plan.md
     private int percentWidth(double percent) {
         return (int) (this.width * percent / 100.0);
     }
@@ -2350,7 +2350,7 @@ public class EnderDashboard extends EnderBaseScreen {
      * @param percent 百分比，取值 0..100
      * @return 对应高度，单位为逻辑像素
      */
-    // TODO(P5, 2026-12-31): 目前无调用点——响应式计算已定义但尚未接入各页面，接入或删除见 claude_docs/04-uiux-plan.md
+    // TODO(P5, 2026-12-31): 目前无调用点——响应式计算已定义但尚未接入各页面，接入或删除见 docs/04-uiux-plan.md
     private int percentHeight(double percent) {
         return (int) (this.height * percent / 100.0);
     }
@@ -2360,7 +2360,7 @@ public class EnderDashboard extends EnderBaseScreen {
      *
      * @return 按钮宽度，单位为逻辑像素，取值 100..250（屏幕宽度的六分之一，越界则夹紧）
      */
-    // TODO(P5, 2026-12-31): 目前无调用点——响应式计算已定义但尚未接入各页面，接入或删除见 claude_docs/04-uiux-plan.md
+    // TODO(P5, 2026-12-31): 目前无调用点——响应式计算已定义但尚未接入各页面，接入或删除见 docs/04-uiux-plan.md
     private int adaptiveButtonWidth() {
         int base = Math.min(250, Math.max(100, this.width / 6));
         return base;
@@ -2373,7 +2373,7 @@ public class EnderDashboard extends EnderBaseScreen {
      *
      * @return 按钮宽度，单位为逻辑像素，取值 80..150（屏幕宽度的十分之一，越界则夹紧）
      */
-    // TODO(P5, 2026-12-31): 目前无调用点——响应式计算已定义但尚未接入各页面，接入或删除见 claude_docs/04-uiux-plan.md
+    // TODO(P5, 2026-12-31): 目前无调用点——响应式计算已定义但尚未接入各页面，接入或删除见 docs/04-uiux-plan.md
     private int adaptiveSmallButtonWidth() {
         int base = Math.min(150, Math.max(80, this.width / 10));
         return base;
@@ -2384,7 +2384,7 @@ public class EnderDashboard extends EnderBaseScreen {
      *
      * @return 边距，单位为逻辑像素，至少 10（屏幕宽度的四十分之一）
      */
-    // TODO(P5, 2026-12-31): 目前无调用点——响应式计算已定义但尚未接入各页面，接入或删除见 claude_docs/04-uiux-plan.md
+    // TODO(P5, 2026-12-31): 目前无调用点——响应式计算已定义但尚未接入各页面，接入或删除见 docs/04-uiux-plan.md
     private int adaptiveMargin() {
         return Math.max(10, this.width / 40);
     }
@@ -2394,7 +2394,7 @@ public class EnderDashboard extends EnderBaseScreen {
      *
      * @return 间距，单位为逻辑像素，至少 5（屏幕宽度的八十分之一）
      */
-    // TODO(P5, 2026-12-31): 目前无调用点——响应式计算已定义但尚未接入各页面，接入或删除见 claude_docs/04-uiux-plan.md
+    // TODO(P5, 2026-12-31): 目前无调用点——响应式计算已定义但尚未接入各页面，接入或删除见 docs/04-uiux-plan.md
     private int adaptiveSpacing() {
         return Math.max(5, this.width / 80);
     }

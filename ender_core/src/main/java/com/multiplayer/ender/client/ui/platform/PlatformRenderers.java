@@ -32,7 +32,7 @@ package com.multiplayer.ender.client.ui.platform;
  * 惰性初始化也没有同步（违反 ADR-05「静态只允许常量」），并发首次调用可能重复创建实例
  * 或读到尚未完整构造的对象。当前只被客户端渲染线程访问，迁移前禁止从其他线程调用。
  *
- * TODO(P3, 2026-10-06): 移除反射发现，改为适配接口实现，见 claude_docs/00-decisions-and-open-questions.md 的 ADR-03
+ * TODO(P3, 2026-10-06): 移除反射发现，改为适配接口实现，见 docs/00-decisions-and-open-questions.md 的 ADR-03
  * FIXME(P3, 2026-10-06): 静态可变状态缺同步且非 final，违反 ADR-05，需随守卫基线收敛
  * FIXME(P3, 2026-10-06): 异常消息为中文字符串字面量，违反 ADR-15 的「字符串用英文」
  *

@@ -1,6 +1,6 @@
 # 版本目录（Gradle Version Catalog）—— 依赖与版本的唯一来源
 #
-# 规则（见 claude_docs/01-architecture-plan.md §6）：
+# 规则（见 docs/01-architecture-plan.md §6）：
 #   1. 任何依赖坐标与版本号只允许写在本文件里；各 build.gradle 必须通过 libs.* 引用。
 #   2. 守卫 check-dependency-single-source.ps1 会拦截在 build.gradle 里硬编码的坐标；
 #      本文件落地后该守卫的基线应降为 0。

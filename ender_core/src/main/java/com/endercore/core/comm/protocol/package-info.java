@@ -13,7 +13,7 @@
  * 包内约定：
  * 1. 编解码的自定义异常统一为 CoreProtocolException，不抛其它受检异常。
  * 2. 帧字段的取值范围必须与 CoreProtocol 中的常量保持一致；改动头部布局需同步更新
- * claude_docs/03-protocol-plan.md，因为那是协议的唯一权威定义。
+ * docs/03-protocol-plan.md，因为那是协议的唯一权威定义。
  * 3. 编解码器不接受 null 输入，也不返回 null。
  *
  * @since 1.0

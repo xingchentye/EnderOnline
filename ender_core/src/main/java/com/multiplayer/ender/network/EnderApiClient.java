@@ -66,7 +66,7 @@ import com.multiplayer.ender.logic.PortAllocator;
  * startHosting 的异步体）、Scaffolding 调度线程与网络回调线程上，彼此之间没有统一同步。
  * 读多写少的展示类字段（currentState、currentRoom、lastError）尤其容易出现陈旧值。
  *
- * TODO(P3, 2026-10-06): 拆分见 claude_docs/06-logic-and-code-quality.md §3.1——计划拆为 6 个类：
+ * TODO(P3, 2026-10-06): 拆分见 docs/06-logic-and-code-quality.md §3.1——计划拆为 6 个类：
  * 房间状态机、Scaffolding 服务端、Scaffolding 客户端、玩家名册、房间配置存储、端口分配。
  *
  * @since 1.0

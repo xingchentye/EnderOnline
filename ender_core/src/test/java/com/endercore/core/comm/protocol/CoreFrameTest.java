@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 刻意固化的「已知缺陷」断言：
  * 1. {@code equals} 对 {@code byte[]} 组件按引用比较（{@code Objects.equals}），而 {@code hashCode}
  *    用 {@code Arrays.hashCode}——两者语义不一致，导致「内容相同但引用不同」的两个帧既不相等、
- *    又可能哈希相同。见缺陷 D1 与 claude_docs/06-logic-and-code-quality.md §2.3。
+ *    又可能哈希相同。见缺陷 D1 与 docs/06-logic-and-code-quality.md §2.3。
  *    固化点：{@link #equalContentButDifferentArrayReferenceIsNotEqual()}。
  * 2. {@code payload()} 直接返回内部数组，未做防御性拷贝，外部可改写帧内容。
  *    固化点：{@link #payloadAccessorExposesInternalArray()}。

@@ -15,12 +15,12 @@
 |---|---|
 | Forge | ✅ 支持 |
 | NeoForge | ✅ 支持 |
-| **Fabric** | ❌ **已终止支持**（[ADR-00](./claude_docs/00-decisions-and-open-questions.md)）。最后一个支持版本见 git tag `fabric-eol-v0.1.2` |
+| **Fabric** | ❌ **已终止支持**（[ADR-00](./docs/00-decisions-and-open-questions.md)）。最后一个支持版本见 git tag `fabric-eol-v0.1.2` |
 | Android | 加入方完整支持；作房主需设备已运行 EasyTier（APK / Magisk） |
 
 > 终止 Fabric 的依据、删除范围与保留项见
-> [`claude_docs/01-architecture-plan.md`](./claude_docs/01-architecture-plan.md) §4 与
-> [`claude_docs/baseline-audit.md`](./claude_docs/baseline-audit.md) §6.2。
+> [`docs/01-architecture-plan.md`](./docs/01-architecture-plan.md) §4 与
+> [`docs/baseline-audit.md`](./docs/baseline-audit.md) §6.2。
 
 ## 模块结构
 
@@ -37,24 +37,24 @@ forge/ neoforge/ 仅加载器适配（入口点、事件、渲染桥、ScreenHoo
 
 ## 详细文档
 
-详细架构、方案与执行计划全部位于 **[`claude_docs/`](./claude_docs)**。
-**每次收到新任务，先读 [`claude_docs/README.md`](./claude_docs/README.md)（含文档地图），再按需展开。**
+详细架构、方案与执行计划全部位于 **[`docs/`](./docs)**。
+**每次收到新任务，先读 [`docs/README.md`](./docs/README.md)（含文档地图），再按需展开。**
 
 | 文档 | 内容 |
 |---|---|
-| [`claude_docs/README.md`](./claude_docs/README.md) | 文档索引与「怎么用这套文档」 |
-| [`claude_docs/baseline-audit.md`](./claude_docs/baseline-audit.md) | 实测基线（规模/技术债/真实缺陷/根因/删除清单）——**动手前必读** |
-| [`claude_docs/00-decisions-and-open-questions.md`](./claude_docs/00-decisions-and-open-questions.md) | ADR-00/01/03~15（ADR-02 作废）+ 裁决状态 |
-| [`claude_docs/01-architecture-plan.md`](./claude_docs/01-architecture-plan.md) | 目标架构、共享源集、**终止 Fabric**、构建收敛 |
-| [`claude_docs/02-performance-plan.md`](./claude_docs/02-performance-plan.md) | 线程/生命周期、内存、网络、性能预算 |
-| [`claude_docs/03-protocol-plan.md`](./claude_docs/03-protocol-plan.md) | 协议 v2（帧格式、握手、差量；不做 v1 双栈） |
-| [`claude_docs/04-uiux-plan.md`](./claude_docs/04-uiux-plan.md) | 设计系统、响应式布局、触控、i18n |
-| [`claude_docs/05-cross-platform-plan.md`](./claude_docs/05-cross-platform-plan.md) | Android + Windows 双端适配 |
-| [`claude_docs/06-logic-and-code-quality.md`](./claude_docs/06-logic-and-code-quality.md) | 状态所有权、错误模型、God Class 拆分、13 组重复消除 |
-| [`claude_docs/07-testing-plan.md`](./claude_docs/07-testing-plan.md) | 测试金字塔、必测清单、基准 |
-| [`claude_docs/08-phases.md`](./claude_docs/08-phases.md) | 10 个阶段的顺序、验收命令、工时、风险 |
-| [`claude_docs/09-quality-guards.md`](./claude_docs/09-quality-guards.md) | 守卫脚本与 CI 卡口 —— **改代码前必读** |
-| [`claude_docs/10-code-style.md`](./claude_docs/10-code-style.md) | **代码规范**：注释/命名/结构/错误处理/日志/提交信息 —— **强制** |
+| [`docs/README.md`](./docs/README.md) | 文档索引与「怎么用这套文档」 |
+| [`docs/baseline-audit.md`](./docs/baseline-audit.md) | 实测基线（规模/技术债/真实缺陷/根因/删除清单）——**动手前必读** |
+| [`docs/00-decisions-and-open-questions.md`](./docs/00-decisions-and-open-questions.md) | ADR-00/01/03~15（ADR-02 作废）+ 裁决状态 |
+| [`docs/01-architecture-plan.md`](./docs/01-architecture-plan.md) | 目标架构、共享源集、**终止 Fabric**、构建收敛 |
+| [`docs/02-performance-plan.md`](./docs/02-performance-plan.md) | 线程/生命周期、内存、网络、性能预算 |
+| [`docs/03-protocol-plan.md`](./docs/03-protocol-plan.md) | 协议 v2（帧格式、握手、差量；不做 v1 双栈） |
+| [`docs/04-uiux-plan.md`](./docs/04-uiux-plan.md) | 设计系统、响应式布局、触控、i18n |
+| [`docs/05-cross-platform-plan.md`](./docs/05-cross-platform-plan.md) | Android + Windows 双端适配 |
+| [`docs/06-logic-and-code-quality.md`](./docs/06-logic-and-code-quality.md) | 状态所有权、错误模型、God Class 拆分、13 组重复消除 |
+| [`docs/07-testing-plan.md`](./docs/07-testing-plan.md) | 测试金字塔、必测清单、基准 |
+| [`docs/08-phases.md`](./docs/08-phases.md) | 10 个阶段的顺序、验收命令、工时、风险 |
+| [`docs/09-quality-guards.md`](./docs/09-quality-guards.md) | 守卫脚本与 CI 卡口 —— **改代码前必读** |
+| [`docs/10-code-style.md`](./docs/10-code-style.md) | **代码规范**：注释/命名/结构/错误处理/日志/提交信息 —— **强制** |
 
 ## 硬约束（违反会被守卫拦截）
 
@@ -73,12 +73,12 @@ forge/ neoforge/ 仅加载器适配（入口点、事件、渲染桥、ScreenHoo
 
 ## 工作方式
 
-1. 开始新任务前读 [`claude_docs/README.md`](./claude_docs/README.md) → 读 [`baseline-audit.md`](./claude_docs/baseline-audit.md)；
-2. 按 [`08-phases.md`](./claude_docs/08-phases.md) 确定当前阶段与依赖；
-3. 编码前读 [`10-code-style.md`](./claude_docs/10-code-style.md)（注释/命名/结构）；
+1. 开始新任务前读 [`docs/README.md`](./docs/README.md) → 读 [`baseline-audit.md`](./docs/baseline-audit.md)；
+2. 按 [`08-phases.md`](./docs/08-phases.md) 确定当前阶段与依赖；
+3. 编码前读 [`10-code-style.md`](./docs/10-code-style.md)（注释/命名/结构）；
 4. 改动前跑守卫拿基线，改动后跑守卫对比；**基线只降不升**；
 5. 完成任务后同步更新对应文档与 `baseline-audit.md` 的数字。
 
 ---
 
-*最后更新: 2026-04（文档体系 v3.1；范围收缩为 Forge + NeoForge；旧 `claude_docs/architecture|directory-structure|features|development|refactoring` 已删除并重写）*
+*最后更新: 2026-04（文档体系 v3.1；范围收缩为 Forge + NeoForge；旧 `docs/architecture|directory-structure|features|development|refactoring` 已删除并重写）*

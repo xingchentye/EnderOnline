@@ -25,7 +25,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * 线程安全性：pool 为 ConcurrentLinkedQueue，acquire 与 release 可被多线程并发调用。
  * 池大小判断与入队不是原子操作，极端并发下池内元素数可能短暂超过 MAX_POOL_SIZE。
  *
- * TODO(P3, 2026-10-06): 明确本类是保留接入还是删除，见 claude_docs/06-logic-and-code-quality.md。
+ * TODO(P3, 2026-10-06): 明确本类是保留接入还是删除，见 docs/06-logic-and-code-quality.md。
  *
  * @since 1.0
  */

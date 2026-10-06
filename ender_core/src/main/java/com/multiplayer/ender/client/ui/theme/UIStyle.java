@@ -34,7 +34,7 @@ package com.multiplayer.ender.client.ui.theme;
  *
  * 线程安全性：本类无可变状态，全部字段都是编译期常量，可被任意线程安全读取。
  *
- * TODO(P3, 2026-10-06): 随 UI 抽象层迁出 ender_core，见 claude_docs/00-decisions-and-open-questions.md 的 ADR-04
+ * TODO(P3, 2026-10-06): 随 UI 抽象层迁出 ender_core，见 docs/00-decisions-and-open-questions.md 的 ADR-04
  *
  * @since 1.0
  * @see ColorPalette

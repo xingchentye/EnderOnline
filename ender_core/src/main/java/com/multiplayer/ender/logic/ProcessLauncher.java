@@ -29,7 +29,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * 1. isRunning / getStatus / isCrashed 当前返回编译期常量，不反映真实进程状态，
  *    任何依赖它们做控制流的代码都会得到错误结论。
  * 2. Android（PojavLauncher / Amethyst）上的外部进程调用需要设备侧已运行 EasyTier，
- *    平台限制见 claude_docs/05-cross-platform-plan.md。
+ *    平台限制见 docs/05-cross-platform-plan.md。
  *
  * 线程安全性：本类无实例状态；EasyTierManager 单例是唯一可变态的持有者，并发语义由它保证。
  *

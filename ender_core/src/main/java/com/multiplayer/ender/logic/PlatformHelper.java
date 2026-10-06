@@ -56,7 +56,7 @@ public class PlatformHelper {
      * CPU 架构类型。
      *
      * NOTE: 仅区分 64 位 x86 与 64 位 ARM，32 位 ARM（armv7l / arm）会落回 UNKNOWN，
-     * 这是已知判定缺陷，见 claude_docs/05-cross-platform-plan.md。
+     * 这是已知判定缺陷，见 docs/05-cross-platform-plan.md。
      */
     public enum Arch {
 

@@ -38,7 +38,7 @@ neoforge/        NeoForge 适配层（同上）
 > `ender_common` **不是 Gradle 子项目**，而是被两端 `sourceSets.main.java.srcDir` 引用的物理源码目录。
 > 之所以能这样共享：两端都使用 Mojang 官方映射，但**无法共享字节码**（`net.minecraftforge.*` 与
 > `net.neoforged.*` 是两套包）。因此共享代码中禁止出现任何加载器包，详见
-> [`claude_docs/00-decisions-and-open-questions.md`](./claude_docs/00-decisions-and-open-questions.md) 的 ADR-13。
+> [`docs/00-decisions-and-open-questions.md`](./docs/00-decisions-and-open-questions.md) 的 ADR-13。
 
 ## 🛠️ 构建指南
 
@@ -107,8 +107,8 @@ Android（PojavLauncher / Amethyst）上的能力边界：
 ## 🤝 贡献与反馈
 
 欢迎提交 Issue 反馈 Bug 或建议，也欢迎提交 Pull Request 参与开发。参与开发前请先阅读
-[`claude_docs/README.md`](./claude_docs/README.md)（文档地图）与
-[`claude_docs/10-code-style.md`](./claude_docs/10-code-style.md)（代码规范）。
+[`docs/README.md`](./docs/README.md)（文档地图）与
+[`docs/10-code-style.md`](./docs/10-code-style.md)（代码规范）。
 
 *   **GitHub**: [EnderOnline](https://github.com/xingchentye/EnderOnline)
 

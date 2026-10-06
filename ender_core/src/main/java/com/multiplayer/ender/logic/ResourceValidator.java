@@ -21,7 +21,7 @@ import org.slf4j.LoggerFactory;
  *
  * 线程安全性：本类无实例状态，validate 可被多线程并发调用（当前实现无副作用）。
  *
- * TODO(P3, 2026-10-06): 补齐真实校验或删除本类，见 claude_docs/06-logic-and-code-quality.md。
+ * TODO(P3, 2026-10-06): 补齐真实校验或删除本类，见 docs/06-logic-and-code-quality.md。
  *
  * @since 1.0
  */

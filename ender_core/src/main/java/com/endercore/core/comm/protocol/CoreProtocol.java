@@ -13,7 +13,7 @@ package com.endercore.core.comm.protocol;
  * 必须与本类注释中的布局描述保持一致。
  *
  * 设计约束：任一取值的变更都属于协议不兼容变更，
- * 必须同步更新 claude_docs/03-protocol-plan.md 并提升 VERSION 常量。
+ * 必须同步更新 docs/03-protocol-plan.md 并提升 VERSION 常量。
  *
  * 线程安全性：全部成员为编译期常量，且类不可实例化，天然线程安全。
  *

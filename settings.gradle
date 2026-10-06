@@ -29,7 +29,7 @@ plugins {
 
 rootProject.name = "EnderOnline"
 
-// Fabric 支持已于 v3.1 终止（见 claude_docs/00-decisions-and-open-questions.md 的 ADR-00）。
+// Fabric 支持已于 v3.1 终止（见 docs/00-decisions-and-open-questions.md 的 ADR-00）。
 // 最后一个支持 Fabric 的版本见 git tag fabric-eol-*。
 // 不要重新加入 "fabric"：那会重新引入 3 份重复源码与映射分裂（ADR-14：终止按删除执行）。
 include("neoforge", "forge", "ender_core")

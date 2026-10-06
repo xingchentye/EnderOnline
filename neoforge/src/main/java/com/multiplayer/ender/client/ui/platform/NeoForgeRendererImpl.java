@@ -84,7 +84,7 @@ public class NeoForgeRendererImpl extends NeoForgeRenderer {
      * 绘制渐变矩形。
      *
      * {@code horizontal} 参数当前不影响结果：两个分支都调用同一个 fillGradient（GuGraphics 只提供垂直渐变）。
-     * TODO(P6, 2026-07-31): 实现真正的水平渐变或移除该参数，见 claude_docs/04-uiux-plan.md 的设计系统章节。
+     * TODO(P6, 2026-07-31): 实现真正的水平渐变或移除该参数，见 docs/04-uiux-plan.md 的设计系统章节。
      *
      * @param x 左缘 X 坐标，单位为逻辑像素
      * @param y 上缘 Y 坐标，单位为逻辑像素
