@@ -1,14 +1,14 @@
 /*
- * 本文件属于 EnderOnline NeoForge 适配层。
+ * 本文件属于 EnderOnline 客户端界面层。
  *
- * 职责：游戏内房间设置界面，编辑客户端配置并直接改写集成服务器的游戏规则。
+ * 职责：房间与全局设置界面，集中配置难度、PVP、游戏规则以及自动更新与自动启动。
  *
- * 关键约束：直接继承 Screen 而非 EnderBaseScreen，因为它不使用 HeaderAndFooterLayout；
- * 改动会立即作用于当前世界，没有撤销路径。
+ * 本类当前没有跳转入口（不可达），且未继承 EnderBaseScreen，全部坐标由 init() 手写。
  */
 package com.multiplayer.ender.client.gui;
 
-import com.multiplayer.ender.Config;
+import com.multiplayer.ender.client.PlatformConfigHolder;
+
 import com.multiplayer.ender.network.EnderApiClient;
 import com.multiplayer.ender.logic.ProcessLauncher;
 import net.minecraft.client.gui.GuiGraphics;
@@ -21,36 +21,41 @@ import net.minecraft.world.Difficulty;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * 房间设置界面。
+ * 房间设置界面（Forge 侧当前不可达）。
  *
- * 由暂停菜单的「房间设置」入口跳入（房主视角）。它把三类操作放在同一屏：
- * 客户端配置（自动更新/自动启动）、当前世界的规则（难度、PVP、更多规则），以及断开房间。
+ * 用于集中配置房间属性（难度、PVP、游戏规则）与模组全局设置（自动更新、自动启动）。
+ * Forge 侧目前没有任何跳转入口，而 EnderDashboard 的「规则与玩法」页已在功能上覆盖其中大部分项，
+ * 因此本类属于待合并或待删除的界面。
  *
  * 设计约束：
- * 1. 不使用 {@link EnderBaseScreen} 的布局体系，控件按 {@code centerX/centerY} 手工排布；改版式时需同时改这些偏移量。
- * 2. 难度、PVP、规则按钮只在「当前世界的集成服务器已发布」时创建，访客看不到这些入口。
- * 3. 配置项同样是「临时副本 → 应用设置」，但世界的规则改动是即时生效的，二者语义不同，不要当成一回事。
- * 4. 「关闭房间 / 退出联机」会停止本地核心进程，是破坏性操作。
+ * 1. 本类直接继承 Screen 而非 EnderBaseScreen，控件全部由 init() 手写坐标，
+ *    屏幕尺寸变化时不会自动重排，只会在重新 init 时按新尺寸重算。
+ * 2. 仅当单人世界已发布（server 非 null 且 isPublished()）时才追加房主专属按钮
+ *    （难度、PVP、游戏规则）；访客只看到全局设置与退出按钮。
+ * 3. 「应用设置」只持久化自动更新与自动启动；难度、PVP 与游戏规则是点击即生效，无需保存。
+ * 4. 临时路径字段只读不写，本界面不提供编辑入口。
  *
- * 线程安全性：只在客户端主线程读写，无并发保护。
+ * TODO(P5, 2026-12-31): 与 EnderDashboard 的规则页合并去重，或补上入口后改继承 EnderBaseScreen。
  *
- * @since 1.0
- * @see EnderConfigScreen
+ * 线程安全性：Screen 只在客户端主线程使用；退出按钮会另起线程通知 ProcessLauncher 停止后端。
  */
 public class RoomSettingsScreen extends Screen {
-    /** 父屏幕，用于返回，允许为 null。 */
+    /** 父屏幕，用于关闭时返回；允许为 null，为 null 时退回游戏界面。 */
     private final Screen parent;
-    /** 外部核心路径的临时副本；此处不提供编辑控件，仅为保持与 Config 同步而读入。 */
+
+    /** 核心路径的临时值，init 时从配置读入；本界面没有修改入口，也未写回，属遗留字段。 */
     private String tempPath = "";
-    /** 自动更新开关的临时副本，初始取自配置。 */
+
+    /** 自动更新开关的临时值，默认 false；点击「应用设置」时写回配置。 */
     private boolean tempAutoUpdate = false;
-    /** 自动启动开关的临时副本，初始取自配置。 */
+
+    /** 自动启动后端开关的临时值，默认 false；点击「应用设置」时写回配置。 */
     private boolean tempAutoStart = false;
 
     /**
      * 构造房间设置界面。
      *
-     * @param parent 父屏幕，用于返回，允许为 null
+     * @param parent 父屏幕，允许为 null；为 null 时关闭本屏幕会退回游戏界面
      */
     public RoomSettingsScreen(Screen parent) {
         super(Component.literal("房间设置"));
@@ -58,17 +63,20 @@ public class RoomSettingsScreen extends Screen {
     }
 
     /**
-     * 初始化界面。
+     * 初始化屏幕，契约见 Screen#init。
      *
-     * 先把配置读入临时副本；随后按垂直顺序放置客户端配置按钮、可选的服务器规则按钮
-     * （难度、PVP、游戏规则，仅房主可见），最后是「关闭房间 / 退出联机」与「返回」按钮。
+     * 纵向布局以 (宽/2, 高/2-80) 为基准：先放自动更新、自动启动（行距 24）与「应用设置」三个按钮，
+     * 再按房主身份追加难度、PVP、游戏规则按钮（同样行距 24），最后在底部并排放置
+     * 「关闭房间 / 退出联机」与「返回」（各宽 88，中间留 4 像素间隙）。
+     * 屏幕尺寸变化时本方法会被重新调用，所有临时值都会从配置重新读取。
      */
     @Override
     protected void init() {
-        tempPath = Config.EXTERNAL_ender_PATH.get();
-        tempAutoUpdate = Config.AUTO_UPDATE.get();
-        tempAutoStart = Config.AUTO_START_BACKEND.get();
+        tempPath = PlatformConfigHolder.get().externalCorePath();
+        tempAutoUpdate = PlatformConfigHolder.get().autoUpdate();
+        tempAutoStart = PlatformConfigHolder.get().autoStartBackend();
 
+        // 基准点：屏幕中心，起始 Y 上移 80 像素；按钮统一左边界为 宽/2-90、宽 180
         int centerX = this.width / 2;
         int centerY = this.height / 2;
         int startY = centerY - 80;
@@ -84,18 +92,20 @@ public class RoomSettingsScreen extends Screen {
         }).bounds(centerX - 90, startY + 24, 180, 20).build());
 
         this.addRenderableWidget(Button.builder(Component.literal("应用设置"), b -> {
-            Config.AUTO_UPDATE.set(tempAutoUpdate);
-            Config.AUTO_START_BACKEND.set(tempAutoStart);
-            Config.CLIENT_SPEC.save();
+            PlatformConfigHolder.get().setAutoUpdate(tempAutoUpdate);
+            PlatformConfigHolder.get().setAutoStartBackend(tempAutoStart);
+            PlatformConfigHolder.get().save();
             b.setMessage(Component.literal("设置已保存"));
         }).bounds(centerX - 90, startY + 48, 180, 20).build());
 
+        // 房主专属区起点：全局设置三行占 82 像素（48 + 24 起点偏移 + 10 行距）
         int currentY = startY + 82;
 
         IntegratedServer server = this.minecraft.getSingleplayerServer();
         boolean isHost = server != null && server.isPublished();
 
         if (isHost) {
+            // 难度按钮：点击后在 0..3 之间循环切换难度等级
             this.addRenderableWidget(Button.builder(Component.literal("难度: " + server.getWorldData().getDifficulty().getKey()), b -> {
                 Difficulty current = server.getWorldData().getDifficulty();
                 Difficulty next = Difficulty.byId((current.getId() + 1) % 4);
@@ -121,6 +131,7 @@ public class RoomSettingsScreen extends Screen {
             currentY += 24;
         }
 
+        // 底部操作行：左半宽 88 为断开按钮，右半宽 88 为返回按钮，中间留 4 像素
         Button disconnectBtn = Button.builder(Component.literal(isHost ? "关闭房间" : "退出联机"), b -> {
             EnderApiClient.setIdle();
             new Thread(ProcessLauncher::stop, "Ender-Stopper").start();
@@ -133,16 +144,11 @@ public class RoomSettingsScreen extends Screen {
         }).bounds(centerX + 2, currentY, 88, 20).build();
         this.addRenderableWidget(backBtn);
     }
-    
+
     /**
-     * 渲染界面。
+     * 渲染屏幕，契约见 Screen#render。
      *
-     * 在原版渲染之上把标题居中画在按钮组上方。
-     *
-     * @param guiGraphics 绘图上下文，不能为 null
-     * @param mouseX 鼠标 X 坐标，单位为逻辑像素
-     * @param mouseY 鼠标 Y 坐标，单位为逻辑像素
-     * @param partialTick 当前帧的部分刻进度，取值 0.0..1.0
+     * 在父类绘制完成后，把标题绘制在屏幕水平居中、垂直中心上方 100 像素处。
      */
     @Override
     public void render(@NotNull GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
@@ -151,9 +157,9 @@ public class RoomSettingsScreen extends Screen {
     }
 
     /**
-     * 关闭屏幕，返回父屏幕。
+     * 关闭屏幕，契约见 Screen#onClose。
      *
-     * 注意：关闭本界面不会停止托管，停止托管只在点击「关闭房间 / 退出联机」时发生。
+     * 返回构造时传入的父屏幕；父屏幕为 null 时退回游戏界面。
      */
     @Override
     public void onClose() {

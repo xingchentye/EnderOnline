@@ -1,11 +1,13 @@
 /*
- * 本文件属于 EnderOnline Forge 适配层。
+ * 本文件属于 EnderOnline 客户端界面层。
  *
  * 职责：后端启动器界面，检测环境、下载核心组件、分配端口并把结果交还调用方。
  *
  * 启动工作全部在公共线程池上执行，界面线程只负责展示进度；状态字段缺少同步，见类注释的 FIXME。
  */
 package com.multiplayer.ender.client.gui;
+
+import com.multiplayer.ender.client.PlatformConfigHolder;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -21,7 +23,6 @@ import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.multiplayer.ender.ConfigForge;
 import com.multiplayer.ender.logic.DownloadManager;
 import com.multiplayer.ender.logic.PlatformHelper;
 import com.multiplayer.ender.logic.ProcessLauncher;
@@ -198,7 +199,7 @@ public class StartupScreen extends EnderBaseScreen {
                PlatformHelper.OS os = PlatformHelper.getOS();
                PlatformHelper.Arch arch = PlatformHelper.getArch();
 
-               String customPathStr = ConfigForge.EXTERNAL_ender_PATH.get();
+               String customPathStr = PlatformConfigHolder.get().externalCorePath();
                if (!customPathStr.isEmpty()) {
                     Path customPath = Path.of(customPathStr);
                     if (Files.exists(customPath)) {
@@ -215,7 +216,7 @@ public class StartupScreen extends EnderBaseScreen {
                if (!Files.exists(downloadDir)) {
                    Files.createDirectories(downloadDir);
                }
-               boolean autoUpdate = ConfigForge.AUTO_UPDATE.get();
+               boolean autoUpdate = PlatformConfigHolder.get().autoUpdate();
 
                Path existingExe = scanForExecutable(downloadDir);
 

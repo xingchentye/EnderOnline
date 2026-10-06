@@ -1,5 +1,5 @@
 /*
- * 本文件属于 EnderOnline Forge 适配层。
+ * 本文件属于 EnderOnline 客户端界面层。
  *
  * 职责：客户端全局设置界面，编辑核心路径、自动更新与自动启动三项配置。
  *
@@ -7,7 +7,8 @@
  */
 package com.multiplayer.ender.client.gui;
 
-import com.multiplayer.ender.ConfigForge;
+import com.multiplayer.ender.client.PlatformConfigHolder;
+
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.StringWidget;
@@ -28,7 +29,7 @@ import net.minecraft.network.chat.Component;
  * 2. 本界面不校验核心路径是否存在，非法路径要等到 StartupScreen 启动阶段才会暴露。
  * 3. 路径输入框上限为 1024 字符。
  *
- * 线程安全性：Screen 只在客户端主线程使用；ConfigForge.CLIENT_SPEC.save() 也只在此线程调用。
+ * 线程安全性：Screen 只在客户端主线程使用；PlatformConfigHolder.get().save() 也只在此线程调用。
  *
  * @see ConfigForge
  * @see EnderDashboard
@@ -52,9 +53,9 @@ public class EnderConfigScreen extends EnderBaseScreen {
      */
     public EnderConfigScreen(Screen parent) {
         super(Component.literal("末影联机设置"), parent);
-        this.tempPath = ConfigForge.EXTERNAL_ender_PATH.get();
-        this.tempAutoUpdate = ConfigForge.AUTO_UPDATE.get();
-        this.tempAutoStart = ConfigForge.AUTO_START_BACKEND.get();
+        this.tempPath = PlatformConfigHolder.get().externalCorePath();
+        this.tempAutoUpdate = PlatformConfigHolder.get().autoUpdate();
+        this.tempAutoStart = PlatformConfigHolder.get().autoStartBackend();
     }
 
     /**
@@ -110,10 +111,10 @@ public class EnderConfigScreen extends EnderBaseScreen {
      * 本方法不幂等，重复调用会重复落盘。
      */
     private void saveConfig() {
-        ConfigForge.EXTERNAL_ender_PATH.set(this.tempPath);
-        ConfigForge.AUTO_UPDATE.set(this.tempAutoUpdate);
-        ConfigForge.AUTO_START_BACKEND.set(this.tempAutoStart);
-        ConfigForge.CLIENT_SPEC.save();
+        PlatformConfigHolder.get().setExternalCorePath(this.tempPath);
+        PlatformConfigHolder.get().setAutoUpdate(this.tempAutoUpdate);
+        PlatformConfigHolder.get().setAutoStartBackend(this.tempAutoStart);
+        PlatformConfigHolder.get().save();
     }
 }
 
