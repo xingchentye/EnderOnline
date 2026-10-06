@@ -11,6 +11,7 @@ package com.multiplayer.ender.client.gui;
 import com.endercore.core.comm.EnderLifecycle;
 
 import com.multiplayer.ender.client.PlatformConfigHolder;
+import com.multiplayer.ender.logic.NameList;
 import com.multiplayer.ender.client.UserNotifierHolder;
 
 import java.util.ArrayList;
@@ -2009,11 +2010,11 @@ public class EnderDashboard extends EnderBaseScreen {
             if (name != null && name.equalsIgnoreCase(hostName)) {
                 continue;
             }
-            if (containsName(blacklist, name)) {
+            if (NameList.contains(blacklist, name)) {
                 disconnectPlayer(player, Component.literal("你已被房主加入黑名单"));
                 continue;
             }
-            if (whitelistEnabled && whitelist != null && !containsName(whitelist, name)) {
+            if (whitelistEnabled && whitelist != null && !NameList.contains(whitelist, name)) {
                 disconnectPlayer(player, Component.literal("你不在白名单中"));
                 continue;
             }
@@ -2029,67 +2030,8 @@ public class EnderDashboard extends EnderBaseScreen {
         }
     }
 
-    /**
-     * 向名单数组添加玩家名。
-     *
-     * 忽略大小写去重；已存在时不重复添加。
-     * NOTE: 当前无调用点，保留为 P3 拆分时的名单编辑入口。
-     *
-     * @param array 目标数组，允许为 null（为 null 时不做任何事）
-     * @param name 玩家名，允许为 null（为 null 时不做任何事）
-     */
-    private void addNameToArray(JsonArray array, String name) {
-        if (array == null || name == null) {
-            return;
-        }
-        for (JsonElement el : array) {
-            if (el != null && el.isJsonPrimitive() && name.equalsIgnoreCase(el.getAsString())) {
-                return;
-            }
-        }
-        array.add(name);
-    }
 
-    /**
-     * 从名单数组移除首个匹配的玩家名。
-     *
-     * 忽略大小写匹配，只移除第一条命中项。
-     * NOTE: 当前无调用点，保留为 P3 拆分时的名单编辑入口。
-     *
-     * @param array 目标数组，允许为 null（为 null 时不做任何事）
-     * @param name 玩家名，允许为 null（为 null 时不做任何事）
-     */
-    private void removeNameFromArray(JsonArray array, String name) {
-        if (array == null || name == null) {
-            return;
-        }
-        for (int i = 0; i < array.size(); i++) {
-            JsonElement el = array.get(i);
-            if (el != null && el.isJsonPrimitive() && name.equalsIgnoreCase(el.getAsString())) {
-                array.remove(i);
-                return;
-            }
-        }
-    }
 
-    /**
-     * 判断名单数组中是否存在指定玩家名。
-     *
-     * @param array 名单数组，允许为 null
-     * @param name 玩家名，允许为 null；为 null 时返回 false
-     * @return 存在同名（忽略大小写）条目时返回 true
-     */
-    private boolean containsName(JsonArray array, String name) {
-        if (array == null || name == null) {
-            return false;
-        }
-        for (JsonElement el : array) {
-            if (el != null && el.isJsonPrimitive() && name.equalsIgnoreCase(el.getAsString())) {
-                return true;
-            }
-        }
-        return false;
-    }
 
     /**
      * 把玩家踢出当前世界。
