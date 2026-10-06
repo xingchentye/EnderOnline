@@ -1,3 +1,11 @@
+/*
+ * 本文件属于 EnderOnline 单元测试。
+ *
+ * 职责：守护协议 v1 帧编解码器的往返正确性与畸形输入拒绝能力。
+ *
+ * 关键约束：模糊测试里「随机字节不得被接受为合法帧」是刻意固化的安全断言，
+ * 提高接受率等于放宽协议校验，必须当成缺陷处理而不是调整期望值。
+ */
 package com.endercore.core.comm.protocol;
 
 import com.endercore.core.comm.exception.CoreProtocolException;
@@ -15,31 +23,64 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 /**
  * {@link CoreFrameCodec} 编解码测试。
  *
- * <p>覆盖三类：
- * <ol>
- *   <li>往返（往返等价，含边界尺寸）</li>
- *   <li>畸形输入（必须被拒绝，且不得分配大数组或抛非受检异常）</li>
- *   <li>模糊测试（随机字节流不得导致未分类异常或 OOM）</li>
- * </ol>
+ * 这组测试守护什么：协议 v1 的三类可观察行为，构成协议 v2 改造（P4）的安全网——
+ * 任何协议改动都必须先让这组测试通过。
+ * 1. 往返等价：空 payload、四种消息类型、UTF-8 kind（含中文，长度按字节计）、status 0..255 全范围、
+ *    requestId 边界（含 Long.MIN/MAX）、恰好达到 maxFrameBytes 的最大帧。
+ * 2. 畸形输入必须被拒绝：null、截断头部、magic 错误、version 不匹配、未知 type、
+ *    payloadLen 为负或超限（且不得触发大数组分配）、kindLen 与实际长度不一致、尾部多余字节，
+ *    以及构造期 maxFrameBytes 小于头部长度。
+ * 3. 头部布局与 {@link CoreProtocol} 常量一致（偏移 0/1/2/3/4/5/6/14/16），防止协议被悄悄改版。
  *
- * <p>协议版本为 v1（见 {@link CoreProtocol}）。本测试是协议 v2 改造（P4）的安全网：
- * 任何改动都必须先让这组测试通过。</p>
+ * 刻意固化的断言：
+ * 1. {@link #fuzzRandomBytesOnlyThrowsProtocolException()} 固化「一万条随机字节流一条都不得被接受」。
+ *    这是安全断言：随机数据通过 magic+version+type+长度一致性四重校验的概率应当为 0；
+ *    若该断言失败，说明校验被绕过或放宽，属于必须修复的缺陷，不允许调低期望值。
+ * 2. 同类模糊测试 {@link #fuzzSingleByteCorruption()} 只允许「拒绝」或「等价解码」，禁止未分类异常，
+ *    它固化的是「编解码器不得因坏输入崩溃」这一鲁棒性契约。
+ *
+ * 注意：本文件的断言消息可保留中文——测试源码已从 i18n 守卫中排除，中文失败信息更易读。
+ *
+ * 线程安全性：每个用例各自创建 {@link CoreFrameCodec}，无共享可变状态，可并行执行。
+ *
+ * @since 1.0
+ * @see CoreFrameCodec
+ * @see CoreProtocol
  */
 class CoreFrameCodecTest {
 
-    /** 与生产配置一致的上限：1 MiB。 */
+    /** 与生产配置一致的上限：1 MiB。单位字节，用于构造边界帧与超限帧。 */
     private static final int MAX_FRAME_BYTES = 1024 * 1024;
 
+    /**
+     * 按生产上限构造一个编解码器。
+     *
+     * @return 上限为 {@link #MAX_FRAME_BYTES} 的编解码器，永不为 null
+     */
     private static CoreFrameCodec codec() {
         return new CoreFrameCodec(MAX_FRAME_BYTES);
     }
 
-    /** 走完整的 encode -> decode 往返，返回解码结果。 */
+    /**
+     * 走完整的 encode → decode 往返，返回解码结果。
+     *
+     * @param codec 编解码器，不能为 null
+     * @param frame 待往返的帧，不能为 null
+     * @return 解码后的帧，永不为 null
+     */
     private static CoreFrame roundTrip(CoreFrameCodec codec, CoreFrame frame) {
         byte[] encoded = codec.encode(frame);
         return codec.decode(ByteBuffer.wrap(encoded));
     }
 
+    /**
+     * 逐字段断言两个帧等价。
+     *
+     * 用逐字段比较而不是 {@code assertEquals}，是为了绕开 CoreFrame 的 equals 缺陷（见 CoreFrameTest 的 D1）。
+     *
+     * @param expected 期望帧，不能为 null
+     * @param actual 实际帧，不能为 null
+     */
     private static void assertFrameEquals(CoreFrame expected, CoreFrame actual) {
         assertEquals(expected.type(), actual.type(), "type");
         assertEquals(expected.flags(), actual.flags(), "flags");

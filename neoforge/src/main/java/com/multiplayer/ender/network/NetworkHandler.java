@@ -1,3 +1,10 @@
+/*
+ * 本文件属于 EnderOnline NeoForge 适配层。
+ *
+ * 职责：网络相关的上层业务封装，把后端健康检查与连接流程转成屏幕跳转。
+ *
+ * 关键约束：所有 UI 变更必须回到 Minecraft 主线程执行，禁止在回调线程直接 setScreen。
+ */
 package com.multiplayer.ender.network;
 
 import org.slf4j.Logger;
@@ -13,34 +20,42 @@ import com.multiplayer.ender.client.gui.StartupScreen;
 import com.multiplayer.ender.client.gui.EnderDashboard;
 
 /**
- * 网络操作辅助类。
- * <p>
- * 提供与网络连接相关的上层业务逻辑封装，主要用于 UI 层调用。
- * 包括：
- * 1. 处理“末影联机”入口点击事件（检查后端健康状态并跳转对应屏幕）。
- * 2. 处理连接到服务器的逻辑（封装 {@link NetworkClient} 的调用）。
- * </p>
+ * 网络操作辅助类，供 UI 层调用。
+ *
+ * 把两类用户动作翻译成流程：主菜单「末影联机」入口的落点选择，以及把某个地址端口接成一次连接。
+ * 真正的协议与会话由 {@link NetworkClient} 负责，本类不持有连接状态。
+ *
+ * 设计约束：
+ * 1. 判断「后端是否在跑」只依据 {@link EnderApiClient#hasDynamicPort()} 与一次健康检查，二者都不通过就回落启动屏幕。
+ * 2. 所有 {@code setScreen} 必须包在 {@code Minecraft.execute} 中；后台回调线程不得直接触碰 UI。
+ *
+ * 线程安全性：本类无实例状态，全部是静态方法；异步结果统一由主线程执行器落地。
+ *
+ * @since 1.0
+ * @see EnderApiClient
+ * @see NetworkClient
  */
 public class NetworkHandler {
+    /** 模块日志记录器，复用主入口的全局 logger 以统一日志格式。 */
     private static final Logger LOGGER = MinecraftEnder.LOGGER;
 
     /**
      * 初始化网络模块。
-     * 目前仅记录日志，可用于注册网络通道等初始化操作。
+     *
+     * 当前只记录日志，保留为后续注册自定义网络通道的挂点。
      */
     public static void init() {
         LOGGER.info("初始化网络通信模块...");
     }
 
     /**
-     * 当用户点击主菜单的“末影联机”按钮时调用。
-     * <p>
-     * 逻辑流程：
-     * 1. 检查是否已记录动态端口（即后端是否可能正在运行）。
-     * 2. 如果有端口，检查后端健康状态 {@link EnderApiClient#checkHealth()}。
-     * 3. 如果健康，跳转到仪表盘 {@link EnderDashboard}。
-     * 4. 如果不健康或无端口，跳转到启动屏幕 {@link StartupScreen} 以启动后端进程。
-     * </p>
+     * 处理主菜单「末影联机」按钮点击。
+     *
+     * 先看是否已记录动态端口（存在端口说明后端可能正在运行）；有端口时异步探活，
+     * 健康则进入 {@link EnderDashboard}，不健康则清掉失效端口并落到 {@link StartupScreen}；
+     * 无端口时直接落到启动屏幕。
+     *
+     * 幂等性：本方法只读取状态并跳转，重复调用不会产生额外副作用。
      */
     public static void onConnectButtonClicked() {
         Minecraft minecraft = Minecraft.getInstance();
@@ -63,15 +78,15 @@ public class NetworkHandler {
 
     /**
      * 连接到指定服务器。
-     * <p>
-     * 启动连接流程，显示连接中屏幕 {@link ConnectingScreen}。
-     * 调用 {@link NetworkClient#connect} 执行实际连接。
-     * 连接成功跳转大厅 {@link LobbyScreen}，失败显示错误信息。
-     * </p>
      *
-     * @param host         目标主机地址
-     * @param port         目标端口
-     * @param parentScreen 父屏幕，用于返回
+     * 立即切换到 {@link ConnectingScreen} 作为过渡，再让 {@link NetworkClient#connect} 执行实际连接；
+     * 成功进入 {@link LobbyScreen}，失败把异常消息写回过渡屏幕的状态行。
+     *
+     * 设计约束：失败路径直接展示 {@code ex.getMessage()} 是 ADR-07 的既有违例（应改为错误码 + 本地化文案），P7 一并处理。
+     *
+     * @param host 目标主机地址，不能为 null 或空串
+     * @param port 目标端口，取值 1..65535
+     * @param parentScreen 父屏幕，用于返回，允许为 null
      */
     public static void connectToServer(String host, int port, net.minecraft.client.gui.screens.Screen parentScreen) {
         LOGGER.info("正在连接到 {}:{}...", host, port);
@@ -93,5 +108,3 @@ public class NetworkHandler {
         });
     }
 }
-
-

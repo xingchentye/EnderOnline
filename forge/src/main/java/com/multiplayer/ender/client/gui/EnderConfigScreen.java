@@ -1,3 +1,10 @@
+/*
+ * 本文件属于 EnderOnline Forge 适配层。
+ *
+ * 职责：客户端全局设置界面，编辑核心路径、自动更新与自动启动三项配置。
+ *
+ * 采用「临时值 + 显式保存」模式，取消不产生任何写入。
+ */
 package com.multiplayer.ender.client.gui;
 
 import com.multiplayer.ender.ConfigForge;
@@ -10,22 +17,38 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
 /**
- * 末影联机设置屏幕。
- * 提供对模组配置项的修改功能，如核心路径、自动更新和自动启动。
+ * 末影联机设置界面。
+ *
+ * 属于「全局模组设置」页：由 EnderDashboard 空闲页的「设置」按钮打开，可修改核心文件路径、
+ * 自动更新开关与自动启动开关；点击「保存并返回」写回 ender.toml 并返回上一屏。
+ *
+ * 设计约束：
+ * 1. 三项配置在构造时读入临时字段，只有 saveConfig 才写回 ConfigForge；
+ *    「取消」只关闭界面，不产生任何写入。
+ * 2. 本界面不校验核心路径是否存在，非法路径要等到 StartupScreen 启动阶段才会暴露。
+ * 3. 路径输入框上限为 1024 字符。
+ *
+ * 线程安全性：Screen 只在客户端主线程使用；ConfigForge.CLIENT_SPEC.save() 也只在此线程调用。
+ *
+ * @see ConfigForge
+ * @see EnderDashboard
  */
 public class EnderConfigScreen extends EnderBaseScreen {
-    /** 临时存储的核心路径配置值 */
+    /** 核心路径的临时值，初值取自配置；允许为空字符串，表示不指定外部核心。 */
     private String tempPath;
-    /** 临时存储的自动更新配置值 */
+
+    /** 自动更新开关的临时值，初值取自配置，默认 true。 */
     private boolean tempAutoUpdate;
-    /** 临时存储的自动启动后端配置值 */
+
+    /** 自动启动后端开关的临时值，初值取自配置，默认 false。 */
     private boolean tempAutoStart;
 
     /**
-     * 构造函数。
-     * 初始化配置项的临时值为当前配置值。
+     * 构建设置界面，并把当前配置读入临时字段。
      *
-     * @param parent 父屏幕
+     * 临时值与界面实例绑定，因此界面重新初始化不会丢失用户已做的修改。
+     *
+     * @param parent 父屏幕，允许为 null；为 null 时关闭本屏幕会退回游戏界面
      */
     public EnderConfigScreen(Screen parent) {
         super(Component.literal("末影联机设置"), parent);
@@ -35,8 +58,10 @@ public class EnderConfigScreen extends EnderBaseScreen {
     }
 
     /**
-     * 初始化屏幕内容。
-     * 创建并布局配置项的控件（文本框、按钮）。
+     * 填充内容区，契约见 EnderBaseScreen#initContent。
+     *
+     * 内容区用 2 列 GridLayout 排布：第 0 行为路径标签与输入框，第 1、2 行分别是自动更新与
+     * 自动启动的切换按钮（各自跨两列，宽 150）；尾部件为「保存并返回」与「取消」两个并排按钮。
      */
     @Override
     protected void initContent() {
@@ -44,6 +69,7 @@ public class EnderConfigScreen extends EnderBaseScreen {
         grid.defaultCellSetting().paddingBottom(8);
 
         grid.addChild(new StringWidget(Component.literal("核心路径"), this.font), 0, 0);
+        // 路径输入框宽 200、高 20；x/y 传 0 由 GridLayout 接管
         EditBox pathBox = new EditBox(this.font, 0, 0, 200, 20, Component.literal("Path"));
         pathBox.setValue(this.tempPath);
         pathBox.setMaxLength(1024);
@@ -78,8 +104,10 @@ public class EnderConfigScreen extends EnderBaseScreen {
     }
 
     /**
-     * 保存配置。
-     * 将临时变量的值应用到 ConfigForge 并持久化保存。
+     * 把三个临时值写回配置并持久化。
+     *
+     * 会立即把 CLIENT_SPEC 写入 ender.toml，因此保存后配置变更对后续启动即时生效；
+     * 本方法不幂等，重复调用会重复落盘。
      */
     private void saveConfig() {
         ConfigForge.EXTERNAL_ender_PATH.set(this.tempPath);

@@ -1,3 +1,11 @@
+/*
+ * 本文件属于 EnderOnline NeoForge 适配层。
+ *
+ * 职责：房主端的托管逻辑核心，把 Minecraft 世界状态同步到后端并执行后端下发的控制指令。
+ *
+ * 关键约束：只在客户端逻辑服务器（集成服务器）上运行，由 ServerTickHandler 每 tick 调用；
+ * 本类不做线程切换，「当前是否托管」的判断依赖 EnderApiClient 的状态机。
+ */
 package com.multiplayer.ender.client;
 
 import com.google.gson.JsonArray;
@@ -14,22 +22,44 @@ import net.minecraft.world.level.GameType;
 import java.util.List;
 
 /**
- * 房间托管逻辑核心类。
- * 负责在房主端同步游戏状态到后端，并执行后端的控制指令。
+ * 房间托管逻辑核心。
  *
- * @author Ender Developer
- * @version 1.0
+ * 双向同步的一端全在这里：上行把 PVP、作弊、刷怪、火势蔓延、昼夜等世界规则推给后端，
+ * 下行把后端的白名单/黑名单/访客权限与规则开关应用到当前世界。
+ *
+ * 设计约束：
+ * 1. 节流：{@link #onServerTick} 只每 20 tick（约 1 秒）执行一次同步，不要在每 tick 都跑。
+ * 2. 状态归属：只有 {@link EnderApiClient.State#HOSTING} 时才工作；离开该状态会把 initialized 复位，
+ *    使得下次进入托管时重新做一次全量同步。
+ * 3. 幂等性：{@link #applyState} 每轮都会重放全部规则与权限，重复执行不会累积副作用；
+ *    因此它可以直接按当前状态覆盖，而无需 diff。
+ * 4. 反射回退链的成因：本类的 getMethod/getField 调用曾是跨 Yarn（Fabric）与 Mojmap（Forge/NeoForge）
+ *    两套映射的兼容层——同一语义在两套映射下方法名/字段名不同，只能靠反射按名字探测。
+ *    Fabric 支持已终止（ADR-00 / ADR-14），两端统一使用 Mojang 官方映射，
+ *    这些回退分支已无存在理由，应按 ADR-03 全部删除、改为直接调用 Mojmap 方法。
+ *    TODO(P4, 2026-07-31): 删除本类的反射回退链，见 claude_docs/00-decisions-and-open-questions.md 的 ADR-03
+ *
+ * 线程安全性：全部方法与字段都只在服务器主线程（事件回调链）上执行，无同步措施，也不允许跨线程调用。
+ *
  * @since 1.0
+ * @see ServerTickHandler
+ * @see EnderApiClient
  */
 public class RoomHostLogic {
+    /** tick 计数器，累计到 20 的倍数时才执行一轮同步（约 1 秒一次）。 */
     private static int tickCounter = 0;
+
+    /** 是否已完成本轮托管的首帧全量同步；进入托管时置 false，同步完成后置 true。 */
     private static boolean initialized = false;
 
     /**
      * 服务器 Tick 回调。
-     * 定期同步状态并应用规则。
      *
-     * @param server Minecraft 服务器实例
+     * 每 20 tick 执行一轮：先在首次进入托管时做一次全量上行同步，再拉取后端状态并应用下行规则。
+     *
+     * 幂等性：重复调用是安全的，规则应用本身是覆盖式的。
+     *
+     * @param server 当前逻辑服务器实例，不能为 null
      */
     public static void onServerTick(MinecraftServer server) {
         if (tickCounter++ % 20 != 0) return; 
@@ -51,9 +81,14 @@ public class RoomHostLogic {
     }
 
     /**
-     * 将 Minecraft 游戏规则和设置同步到后端。
+     * 把当前世界的规则与设置上行同步到后端。
      *
-     * @param server Minecraft 服务器实例
+     * 推送的字段包括：allow_pvp、allow_cheats、spawn_protection、keep_inventory、weather_lock、
+     * mob_spawning、fire_spread、time_lock（cycle/fixed）。
+     *
+     * 失败容忍：读取本机设置时使用反射回退链（见类注释约束 4），探测失败按默认值处理而不是中断同步。
+     *
+     * @param server 当前逻辑服务器实例，不能为 null
      */
     private static void syncFromMinecraft(MinecraftServer server) {
         JsonObject update = new JsonObject();
@@ -105,12 +140,13 @@ public class RoomHostLogic {
     }
 
     /**
-     * 获取布尔类型的游戏规则值。
-     * 兼容不同版本的字段名称。
+     * 按候选字段名读取一个布尔游戏规则。
      *
-     * @param server     服务器实例
-     * @param fieldNames 字段名称列表
-     * @return 规则值，如果未找到则返回 true
+     * 依次尝试每个字段名，命中第一个可解析的 {@code GameRules.Key} 即返回。字段名差异源于历史映射（见类注释约束 4）。
+     *
+     * @param server 当前逻辑服务器实例，不能为 null
+     * @param fieldNames 候选字段名，按优先级排列，至少一个
+     * @return 规则当前值；全部探测失败时返回 true（保守默认：不关闭玩法）
      */
     private static boolean getBooleanGameRule(MinecraftServer server, String... fieldNames) {
         for (String fieldName : fieldNames) {
@@ -126,11 +162,15 @@ public class RoomHostLogic {
     }
 
     /**
-     * 应用后端状态到服务器。
-     * 执行访问控制和游戏规则同步。
+     * 把后端状态应用到服务器。
      *
-     * @param server Minecraft 服务器实例
-     * @param state  后端状态 JSON
+     * 先执行访问控制（白名单/黑名单/访客权限），再执行游戏规则同步。顺序不可颠倒：
+     * 被踢出的玩家不应再被改动游戏模式。
+     *
+     * 幂等性：每轮都会重放，重复调用不会产生累积影响。
+     *
+     * @param server 当前逻辑服务器实例，不能为 null
+     * @param state 后端房间管理状态，不能为 null
      */
     public static void applyState(MinecraftServer server, JsonObject state) {
         enforceAccessControl(server, state);
@@ -139,10 +179,14 @@ public class RoomHostLogic {
 
     /**
      * 执行访问控制。
-     * 处理白名单、黑名单和访客权限。
      *
-     * @param server Minecraft 服务器实例
-     * @param state  后端状态 JSON
+     * 对每个非房主玩家依次判断：黑名单命中则踢出，白名单启用且未命中则踢出，
+     * 「禁止进入」踢出，「仅观战」转为旁观者，「仅聊天」转为冒险模式。
+     *
+     * 设计约束：单机托管时房主自身始终被跳过（按玩家名忽略大小写比较），不会被自己的规则踢掉。
+     *
+     * @param server 当前逻辑服务器实例，不能为 null
+     * @param state 后端房间管理状态，不能为 null；缺字段时按「不限制」处理
      */
     private static void enforceAccessControl(MinecraftServer server, JsonObject state) {
         String hostName = "";
@@ -186,8 +230,14 @@ public class RoomHostLogic {
     /**
      * 执行游戏规则同步。
      *
-     * @param server Minecraft 服务器实例
-     * @param state  后端状态 JSON
+     * 只处理后端状态里出现的字段；缺字段表示「本轮不调整」。天气与时间锁的语义是反的：
+     * {@code weather_lock=true} 对应关闭 {@code RULE_WEATHER_CYCLE}。
+     *
+     * 设计约束：时间锁为固定时会把主世界时间直接设为目标值，但仅在偏差超过 1000 tick 时才写入，
+     * 避免每轮都触发一次时间变更事件。
+     *
+     * @param server 当前逻辑服务器实例，不能为 null
+     * @param state 后端房间管理状态，不能为 null
      */
     private static void enforceGameRules(MinecraftServer server, JsonObject state) {
         if (state.has("allow_pvp")) {
@@ -241,6 +291,13 @@ public class RoomHostLogic {
         }
     }
     
+    /**
+     * 判断名单数组中是否存在指定玩家名。
+     *
+     * @param array 名单数组，允许为 null
+     * @param name 玩家名，允许为 null；为 null 时返回 false
+     * @return 存在同名（忽略大小写）条目时返回 true
+     */
     private static boolean containsName(JsonArray array, String name) {
         if (array == null || name == null) return false;
         for (JsonElement el : array) {
@@ -249,12 +306,28 @@ public class RoomHostLogic {
         return false;
     }
     
+    /**
+     * 把玩家踢出服务器。
+     *
+     * 失败被静默忽略：玩家可能已经断开，此时踢出是空操作。
+     *
+     * @param player 目标玩家，不能为 null
+     * @param reason 断开原因，不能为 null
+     */
     private static void disconnectPlayer(ServerPlayer player, Component reason) {
         try {
             player.connection.disconnect(reason);
         } catch (Exception ignored) {}
     }
     
+    /**
+     * 设置玩家游戏模式。
+     *
+     * 已是目标模式时直接返回，避免重复广播模式变更。设置走反射回退链（见类注释约束 4）。
+     *
+     * @param player 目标玩家，不能为 null
+     * @param type 目标游戏模式，不能为 null
+     */
     private static void setPlayerGameType(ServerPlayer player, GameType type) {
         if (player.gameMode.getGameModeForPlayer() == type) return;
         try {
@@ -263,6 +336,15 @@ public class RoomHostLogic {
         } catch (Exception ignored) {}
     }
     
+    /**
+     * 设置「允许所有玩家作弊」。
+     *
+     * 走反射回退链（见类注释约束 4）：先试 setAllowCheatsForAllPlayers，失败再试 setAllowCommandsForAllPlayers。
+     * 两者都失败时静默放弃，不中断其余规则同步。
+     *
+     * @param server 当前逻辑服务器实例，不能为 null
+     * @param value 是否允许
+     */
     private static void setCheatsAllowed(MinecraftServer server, boolean value) {
         try {
             Object playerList = server.getPlayerList();
@@ -277,6 +359,14 @@ public class RoomHostLogic {
         } catch (Exception ignored) {}
     }
     
+    /**
+     * 设置出生点保护半径。
+     *
+     * 负数会被归零；具体写入走反射回退链（见类注释约束 4）。
+     *
+     * @param server 当前逻辑服务器实例，不能为 null
+     * @param value 半径，单位为方块；负值按 0 处理
+     */
     private static void setSpawnProtection(MinecraftServer server, int value) {
         int radius = Math.max(0, value);
         try {
@@ -292,10 +382,26 @@ public class RoomHostLogic {
         } catch (Exception ignored) {}
     }
     
+    /**
+     * 用已知的规则键设置布尔游戏规则。
+     *
+     * @param server 当前逻辑服务器实例，不能为 null
+     * @param value 目标值
+     * @param key 规则键，不能为 null
+     */
     private static void setBooleanGameRule(MinecraftServer server, boolean value, GameRules.Key<GameRules.BooleanValue> key) {
         server.getGameRules().getRule(key).set(value, server);
     }
 
+    /**
+     * 按候选字段名设置布尔游戏规则。
+     *
+     * 逐个字段名探测，命中第一个可解析的键后写入并返回；全部失败时静默放弃。
+     *
+     * @param server 当前逻辑服务器实例，允许为 null；为 null 时直接返回
+     * @param value 目标值
+     * @param fieldNames 候选字段名，按优先级排列
+     */
     private static void setBooleanGameRule(MinecraftServer server, boolean value, String... fieldNames) {
         if (server == null || fieldNames == null) return;
         for (String fieldName : fieldNames) {

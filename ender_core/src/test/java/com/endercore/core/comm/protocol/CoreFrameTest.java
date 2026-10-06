@@ -1,3 +1,10 @@
+/*
+ * 本文件属于 EnderOnline 单元测试。
+ *
+ * 职责：固化 CoreFrame 当前的值语义，作为 P4 把它从 record 改为 final class 时的回归基线。
+ *
+ * 关键约束：本测试按定义断言的是「已知缺陷」（D1），缺陷修复后这些断言必须同步更新，不能改成放宽条件。
+ */
 package com.endercore.core.comm.protocol;
 
 import org.junit.jupiter.api.DisplayName;
@@ -12,19 +19,34 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * {@link CoreFrame} 的值语义测试。
  *
- * <p>背景：{@code CoreFrame} 目前是 Java record，组件中含 {@code byte[]}。
- * record 自动生成的 {@code equals} 对数组使用引用比较（{@code Objects.equals}），
- * 而 {@code hashCode} 使用 {@code Arrays.hashCode}。两者语义不一致，
- * 导致「内容相同但引用不同」的两个帧既可能不相等、又可能哈希相同。</p>
+ * 这组测试守护什么：{@code CoreFrame} 与「值对象」相关的可观察行为——构造期的 null 归一化、
+ * 字段访问器、以及 equals/hashCode 的一致性。它是 P4 重构（record 改 final class）
+ * 的回归基线：重构后若行为变了，这里必须失败，从而强制作者重新审视语义。
  *
- * <p>这组测试用于「固化当前已知缺陷」：断言当前行为，
- * 以便 P4 把 {@code CoreFrame} 改为 final class 并显式实现
- * {@code equals}/{@code hashCode} 时，测试会失败并提醒更新断言。
- * 参见 claude_docs/baseline-audit.md 的缺陷 D1 与 06-logic-and-code-quality.md §2.3。</p>
+ * 刻意固化的「已知缺陷」断言：
+ * 1. {@code equals} 对 {@code byte[]} 组件按引用比较（{@code Objects.equals}），而 {@code hashCode}
+ *    用 {@code Arrays.hashCode}——两者语义不一致，导致「内容相同但引用不同」的两个帧既不相等、
+ *    又可能哈希相同。见缺陷 D1 与 claude_docs/06-logic-and-code-quality.md §2.3。
+ *    固化点：{@link #equalContentButDifferentArrayReferenceIsNotEqual()}。
+ * 2. {@code payload()} 直接返回内部数组，未做防御性拷贝，外部可改写帧内容。
+ *    固化点：{@link #payloadAccessorExposesInternalArray()}。
+ *
+ * 缺陷修复后如何更新：把上述两条断言改成「新语义下的正确期望」并删除对应的说明注释——
+ * 断言失败正是本测试存在的意义，不要为了让它通过而放宽断言。
+ *
+ * 线程安全性：无状态、无共享可变数据，JUnit 可并行执行。
+ *
+ * @since 1.0
+ * @see CoreFrame
  */
 class CoreFrameTest {
 
-    /** 构造一个各字段固定的帧，便于逐项比较。 */
+    /**
+     * 构造一个各字段固定的帧，便于逐项比较。
+     *
+     * @param payload 载荷字节，允许为 null（由 CoreFrame 的紧凑构造器归一化为空数组）
+     * @return 使用 REQUEST 类型、flags=0x01、status=0、requestId=42、kind="room:create" 的帧，永不为 null
+     */
     private static CoreFrame sample(byte[] payload) {
         return new CoreFrame(CoreMessageType.REQUEST, (byte) 0x01, 0, 42L, "room:create", payload);
     }

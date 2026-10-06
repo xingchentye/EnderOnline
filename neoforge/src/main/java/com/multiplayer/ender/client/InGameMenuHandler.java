@@ -1,3 +1,11 @@
+/*
+ * 本文件属于 EnderOnline NeoForge 适配层。
+ *
+ * 职责：在暂停菜单（Esc）中注入房间入口按钮与房间信息悬浮窗。
+ *
+ * 关键约束：按钮初始不可见，可见性完全由内部 RoomStateWidget 按后端状态驱动；
+ * 所有状态轮询结果必须回到主线程再改控件。
+ */
 package com.multiplayer.ender.client;
 
 import com.google.gson.Gson;
@@ -23,28 +31,48 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ScreenEvent;
 import java.util.concurrent.CompletableFuture;
 
-@EventBusSubscriber(modid = "ender_online", value = Dist.CLIENT)
 /**
  * 游戏内菜单（暂停界面）处理器。
- * <p>
- * 该类负责在 Minecraft 暂停界面（Esc 菜单）中注入自定义按钮和信息显示。
- * 功能包括：
- * 1. 显示/隐藏“末影联机”房间信息悬浮窗。
- * 2. 提供“房间设置”入口（房主）或“房间信息”入口（访客）。
- * 3. 在单人游戏且已开放局域网时，提供快速“创建房间”按钮。
- * </p>
+ *
+ * 在 Esc 菜单右上角投放三个按钮与一个透明的状态挂件：
+ * 1. 「显示信息 / 隐藏信息」切换房间信息悬浮窗。
+ * 2. 「房间设置」（房主）或「房间信息」（访客）跳进仪表盘对应的视图。
+ * 3. 「创建房间」——仅在单人且已开放局域网时出现。
+ *
+ * 设计约束：
+ * 1. 三个按钮创建时一律 {@code visible = false}，可见性由 {@link RoomStateWidget#updateState()} 决定；
+ *    不要在按钮回调里自行改 visible。
+ * 2. 按钮坐标按 {@code screen.width} 右对齐（{@code width - buttonWidth - 5}），不写死绝对位置。
+ * 3. {@link RoomStateWidget} 是个透明控件：它不画自己，只借用 render 回调做 1 秒节流的状态刷新与覆盖绘制。
+ * 4. 「创建房间」有 300 毫秒双击保护（{@code lastCreateClickTime}）；去掉它会导致重复发起托管请求。
+ *
+ * 线程安全性：UI 字段在客户端主线程读写；异步状态回调一律经 {@code Minecraft.execute} 回到主线程，
+ * {@code lastState} 是唯一被异步写入的字段，读它之前需假设可能为 null。
+ *
+ * @since 1.0
+ * @see EnderApiClient
  */
+@EventBusSubscriber(modid = "ender_online", value = Dist.CLIENT)
 public class InGameMenuHandler {
+    /** JSON 解析器，非 null，复用同一实例。 */
     private static final Gson GSON = new Gson();
+
+    /** 是否显示房间信息悬浮窗，默认关闭。 */
     private static boolean showInfoOverlay = false;
+
+    /** 最近一次解析到的后端状态；允许为 null，为 null 时不渲染悬浮窗。 */
     private static JsonObject lastState = null;
+
+    /** 上次「创建房间」点击时间戳，单位毫秒，用于 300 毫秒双击保护。 */
     private static long lastCreateClickTime = 0;
 
     /**
      * 屏幕初始化事件回调。
-     * 当暂停界面打开时调用，注入自定义按钮和状态组件。
      *
-     * @param event 屏幕初始化事件
+     * 仅对 {@link PauseScreen} 生效：创建三个按钮（初始不可见）、再挂上状态挂件并立刻强制刷新一次，
+     * 避免打开菜单的瞬间按钮闪烁或缺失。
+     *
+     * @param event 屏幕初始化事件，不能为 null
      */
     @SubscribeEvent
     public static void onScreenInit(ScreenEvent.Init.Post event) {
@@ -138,14 +166,26 @@ public class InGameMenuHandler {
 
     /**
      * 内部组件：房间状态挂件。
-     * 负责定期轮询后端状态，控制按钮显隐，并渲染信息悬浮窗。
-     * 该组件不可见（透明），但利用 render 方法进行逻辑更新和覆盖绘制。
+     *
+     * 覆盖整个屏幕的透明控件，用 render 回调充当「每帧钩子」：1 秒节流地轮询后端状态，
+     * 据此控制三个按钮的可见性与文案，并可选地覆盖绘制房间信息悬浮窗。
+     *
+     * 设计约束：本控件不绘制自身，也不参与命中测试，因此不会遮挡其它控件。
      */
     private static class RoomStateWidget extends AbstractWidget {
+        /** 信息开关按钮，非 null，由外层注入。 */
         private final Button infoBtn;
+
+        /** 房间设置/信息入口按钮，非 null，由外层注入。 */
         private final Button settingsBtn;
+
+        /** 创建房间按钮，非 null，由外层注入。 */
         private final Button createRoomBtn;
+
+        /** 字体，非 null，用于绘制悬浮窗。 */
         private final Font font;
+
+        /** 上次状态刷新时间戳，单位毫秒；构造时回拨 2000 毫秒以便立刻刷新一次。 */
         private long lastCheck = 0;
 
         public RoomStateWidget(int x, int y, int w, int h, Button infoBtn, Button settingsBtn, Button createRoomBtn, Font font) {
@@ -159,12 +199,25 @@ public class InGameMenuHandler {
 
         /**
          * 强制立即执行一次状态更新。
+         *
+         * 打开暂停菜单时调用，跳过 1 秒节流，让按钮在首帧就处于正确状态。
          */
         public void forceUpdate() {
             this.lastCheck = System.currentTimeMillis();
             updateState();
         }
 
+        /**
+         * 渲染控件（实际不绘制自身）。
+         *
+         * 每帧检查距上次刷新是否超过 1 秒，是则触发一次状态更新；
+         * 若开关打开且已有状态数据，则覆盖绘制房间信息悬浮窗。
+         *
+         * @param guiGraphics 绘图上下文，不能为 null
+         * @param mouseX 鼠标 X 坐标，单位为逻辑像素
+         * @param mouseY 鼠标 Y 坐标，单位为逻辑像素
+         * @param partialTick 当前帧的部分刻进度，取值 0.0..1.0
+         */
         @Override
         protected void renderWidget(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
             long now = System.currentTimeMillis();
@@ -180,9 +233,11 @@ public class InGameMenuHandler {
 
         /**
          * 渲染房间信息悬浮窗。
-         * 显示当前房间号、在线成员列表等信息。
          *
-         * @param guiGraphics GUI 绘图上下文
+         * 左上角半透明底框内依次显示标题、房间号与在线成员（房主加 [房主] 后缀）。
+         * 调用前需保证 {@code lastState} 非 null。
+         *
+         * @param guiGraphics GUI 绘图上下文，不能为 null
          */
         private void renderInfoOverlay(GuiGraphics guiGraphics) {
             int startX = 10;
@@ -231,7 +286,12 @@ public class InGameMenuHandler {
 
         /**
          * 更新当前状态。
-         * 异步请求后端状态，并根据返回结果更新 UI 按钮的可见性和文本。
+         *
+         * 请求后端状态并据此设置按钮可见性：
+         * 已连接（host-ok / guest-ok）时显示信息与设置按钮，访客的设置按钮文案改为「房间信息」；
+         * 否则回落到「本地已开放局域网则显示创建房间按钮」。
+         *
+         * 状态请求失败时会补一次健康检查，不健康则清掉动态端口，避免按钮停在错误状态。
          */
         private void updateState() {
             EnderApiClient.getState().whenComplete((stateJson, ex) -> {
@@ -313,6 +373,13 @@ public class InGameMenuHandler {
             });
         }
 
+        /**
+         * 无障碍朗读文本。
+         *
+         * 本控件纯装饰且不接收焦点，故不产出朗读内容。
+         *
+         * @param narrationElementOutput 朗读输出目标，不能为 null
+         */
         @Override
         protected void updateWidgetNarration(NarrationElementOutput narrationElementOutput) {
         }

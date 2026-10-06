@@ -1,3 +1,10 @@
+/*
+ * 本文件属于 EnderOnline NeoForge 适配层。
+ *
+ * 职责：劫持「对局域网开放」屏幕，把原版开房动作与末影联机托管合并成一次点击。
+ *
+ * 关键约束：原版按钮被隐藏而非移除，新按钮必须先触发原版逻辑再启动托管，顺序不可颠倒。
+ */
 package com.multiplayer.ender.client;
 
 import java.util.concurrent.CompletableFuture;
@@ -24,20 +31,35 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ScreenEvent;
 
-@EventBusSubscriber(modid = "ender_online", value = Dist.CLIENT)
 /**
  * 局域网分享屏幕处理器。
- * <p>
- * 该类负责拦截并修改 Minecraft 的“对局域网开放”屏幕（ShareToLanScreen）。
- * 它添加了一个“末影联机”开关，并劫持“开始局域网世界”按钮，
- * 以便在开启局域网世界的同时启动末影联机房间托管。
- * </p>
+ *
+ * 在 {@link ShareToLanScreen} 上做两件事：加一个「末影联机: 开/关」开关，并把原版
+ * 「开始局域网世界」按钮换成自己的版本——新按钮先执行原版动作，再（在开关打开时）启动远程托管。
+ *
+ * 设计约束：
+ * 1. 原版按钮只被 {@code visible/active = false} 隐藏，仍会被新按钮显式调用；移除它会导致原版开房逻辑丢失。
+ * 2. 登录原版按钮靠消息文本匹配（含 "LAN" 或 "局域网"），依赖原版文案——本地化改动可能让它匹配不到，
+ *    匹配失败时新按钮不会创建，属静默降级。
+ * 3. {@code enableEnder} 是静态开关，跨屏幕实例保留上次选择；这是有意的（玩家通常连续多次开房）。
+ * 4. 访客权限由当前存档的默认游戏模式推导：旁观者 → 仅观战，冒险 → 仅聊天（当前分支为空，等同可交互）。
+ *
+ * 线程安全性：静态字段只在客户端主线程读写；{@code ROOM_POLL_EXECUTOR} 目前未被使用，
+ * 保留为后续异步轮询房间状态的调度器（守护线程，随进程退出）。
+ *
+ * @since 1.0
+ * @see EnderApiClient
+ * @see ClientSetup
  */
+@EventBusSubscriber(modid = "ender_online", value = Dist.CLIENT)
 public class LanShareHandler {
-    /** 是否开启末影联机功能的标志位 */
+    /** 是否开启末影联机，默认关闭；跨屏幕实例保留。 */
     private static boolean enableEnder = false;
+
+    /** JSON 解析器，非 null，复用同一实例。 */
     private static final Gson GSON = new Gson();
-    /** 用于后台轮询房间状态的调度线程池 */
+
+    /** 后台轮询房间状态的单线程调度器，非 null，守护线程；当前无调用点。 */
     private static final ScheduledExecutorService ROOM_POLL_EXECUTOR = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "Ender-Room-Poll");
         thread.setDaemon(true);
@@ -46,16 +68,14 @@ public class LanShareHandler {
 
     /**
      * 当屏幕初始化完成后调用。
-     * <p>
-     * 此方法会在 {@link ShareToLanScreen} 初始化后触发。
-     * 它执行以下操作：
-     * 1. 添加一个切换“末影联机”开启状态的按钮。
-     * 2. 查找原版的“开始局域网世界”按钮，将其隐藏。
-     * 3. 添加一个新的“开始局域网世界”按钮，点击时会先调用原版逻辑，
-     *    如果开启了“末影联机”，则进一步尝试启动远程托管。
-     * </p>
      *
-     * @param event 屏幕初始化后期事件
+     * 仅对 {@link ShareToLanScreen} 生效。执行三步：
+     * 1. 在右上角添加「末影联机: 开/关」开关按钮。
+     * 2. 按文案查找原版「开始局域网世界」按钮并把它隐藏。
+     * 3. 在原位置放一个新按钮：先调用原版逻辑，再按开关决定是否启动远程托管；
+     *    后缀为空时说明存档未开放局域网，不启动托管。
+     *
+     * @param event 屏幕初始化后期事件，不能为 null
      */
     @SubscribeEvent
     public static void onScreenInit(ScreenEvent.Init.Post event) {
@@ -137,12 +157,12 @@ public class LanShareHandler {
 
     /**
      * 启动末影联机托管服务。
-     * <p>
-     * 该方法调用 {@link EnderApiClient#startHosting} 向后端申请房间号。
-     * 成功后会在聊天栏显示房间号通知。
-     * </p>
      *
-     * @param port 本地局域网世界监听的端口号
+     * 无动态端口说明后端未启动，直接在聊天栏报错返回（不抛异常，玩家可先去多人菜单启动）；
+     * 否则调用 {@link EnderApiClient#startHosting} 申请房间号，成功后交给
+     * {@link ClientSetup#handleRoomCodeNotification} 做 toast/聊天栏/剪贴板提示。
+     *
+     * @param port 本地局域网世界监听的端口号，取值 1..65535
      */
     private static void startEnderHosting(int port) {
         Minecraft mc = Minecraft.getInstance();

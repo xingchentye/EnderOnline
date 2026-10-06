@@ -1,3 +1,10 @@
+/*
+ * 本文件属于 EnderOnline NeoForge 适配层。
+ *
+ * 职责：核心路径与自动更新/自动启动的配置界面。
+ *
+ * 关键约束：界面只改临时副本，必须点「保存并返回」才会写入 Config 并持久化。
+ */
 package com.multiplayer.ender.client.gui;
 
 import com.multiplayer.ender.Config;
@@ -10,25 +17,36 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
 /**
- * 设置界面。
- * 用于配置核心路径、自动更新和自动启动选项。
+ * 模组设置界面。
  *
- * @author Ender Developer
- * @version 1.0
+ * 由仪表盘的「设置」按钮跳转而来，集中编辑 {@link Config} 中的客户端项：外部核心路径、自动更新、进入菜单时自动启动后端。
+ *
+ * 设计约束：
+ * 1. 采用「临时副本 → 保存」两段式：改控件只动 {@code temp*} 字段，只有「保存并返回」才写回 Config 并 save()。
+ * 2. 取消或直接关闭界面一律丢弃改动，不做隐式保存。
+ * 3. 路径框最大 1024 字符，未做存在性校验——不存在时由启动流程报错。
+ *
+ * 线程安全性：字段只在客户端主线程读写，无并发保护。
+ *
  * @since 1.0
+ * @see Config
  */
 public class EnderConfigScreen extends EnderBaseScreen {
-    /** 临时存储的核心路径 */
+    /** 外部核心路径的临时副本，初始取 {@code Config.EXTERNAL_ender_PATH} 的当前值，非 null。 */
     private String tempPath;
-    /** 临时存储的自动更新开关 */
+
+    /** 自动更新开关的临时副本，初始取配置当前值。 */
     private boolean tempAutoUpdate;
-    /** 临时存储的自动启动开关 */
+
+    /** 自动启动开关的临时副本，初始取配置当前值。 */
     private boolean tempAutoStart;
 
     /**
-     * 构造函数。
+     * 构造设置界面。
      *
-     * @param parent 父屏幕
+     * 构造时即把三项配置读入临时副本，之后界面不再回读配置。
+     *
+     * @param parent 父屏幕，用于返回，允许为 null
      */
     public EnderConfigScreen(Screen parent) {
         super(Component.literal("末影联机设置"), parent);
@@ -39,7 +57,8 @@ public class EnderConfigScreen extends EnderBaseScreen {
 
     /**
      * 初始化界面内容。
-     * 创建配置表单和保存/取消按钮。
+     *
+     * 内容区是按行列排布的配置表单（路径输入 + 两个开关），底栏是「保存并返回 / 取消」。
      */
     @Override
     protected void initContent() {
@@ -81,8 +100,9 @@ public class EnderConfigScreen extends EnderBaseScreen {
     }
 
     /**
-     * 保存配置。
-     * 将临时变量写入配置文件并持久化。
+     * 把临时副本写回配置并持久化到 {@code ender.toml}。
+     *
+     * 副作用：写入 Config 并调用 {@code CLIENT_SPEC.save()}，此后改动无法通过取消撤销。
      */
     private void saveConfig() {
         Config.EXTERNAL_ender_PATH.set(this.tempPath);

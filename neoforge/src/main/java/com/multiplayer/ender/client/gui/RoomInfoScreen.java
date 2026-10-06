@@ -1,3 +1,10 @@
+/*
+ * 本文件属于 EnderOnline NeoForge 适配层。
+ *
+ * 职责：房间信息只读视图，展示后端状态、房间号与成员数。
+ *
+ * 关键约束：本屏幕不修改任何房间设置，改动入口在 RoomSettingsScreen 与 RoomListsScreen。
+ */
 package com.multiplayer.ender.client.gui;
 
 import com.google.gson.Gson;
@@ -16,27 +23,36 @@ import org.jetbrains.annotations.NotNull;
 
 /**
  * 房间信息界面。
- * 显示当前房间的状态、房间号和在线成员。
  *
- * @author Ender Developer
- * @version 1.0
+ * 由暂停菜单的「房间信息」入口跳入（访客视角），展示当前后端状态的本地化文案、房间号、成员数，
+ * 并提供进入详细名单与断开连接的出口。
+ *
+ * 设计约束：
+ * 1. 本屏幕只读：不写回后端房间管理状态。
+ * 2. 状态每秒轮询一次，且与上一次原始 JSON 相同时提前返回，避免无谓重建控件。
+ * 3. 「断开连接」会同时置空闲并停止本地核心进程，是破坏性操作，无二次确认（待补）。
+ *
+ * 线程安全性：字段在客户端主线程读写；异步回调通过 {@code minecraft.execute} 回到主线程。
+ *
  * @since 1.0
+ * @see RoomListsScreen
  */
 public class RoomInfoScreen extends EnderBaseScreen {
+    /** JSON 解析器，非 null，复用同一实例。 */
     private static final Gson GSON = new Gson();
-    /** 上次检查状态的时间戳 */
+    /** 上次状态轮询时间戳，单位毫秒（System.currentTimeMillis）。 */
     private long lastStateCheck = 0;
-    /** 后端状态显示文本 */
+    /** 后端状态的显示文本，非 null，默认取语言键 {@code ender.dashboard.status.fetching}。 */
     private String backendState = Component.translatable("ender.dashboard.status.fetching").getString();
-    /** 上次获取的原始状态 JSON 字符串 */
+    /** 上次已解析的原始状态 JSON 字符串；允许为 null，用于跳过内容未变的刷新。 */
     private String lastStateRaw = null;
-    /** 上次解析的状态对象 */
+    /** 上次解析出的状态对象；允许为 null，为 null 时房间号回落为「未知」。 */
     private JsonObject lastStateJson = null;
 
     /**
-     * 构造函数。
+     * 构造房间信息界面。
      *
-     * @param parent 父屏幕
+     * @param parent 父屏幕，用于返回，允许为 null
      */
     public RoomInfoScreen(Screen parent) {
         super(Component.literal("房间信息"), parent);
@@ -44,7 +60,8 @@ public class RoomInfoScreen extends EnderBaseScreen {
 
     /**
      * 初始化界面内容。
-     * 显示状态、房间号、成员统计以及操作按钮。
+     *
+     * 内容区依次是状态行、房间号行、成员数行与「详细列表」按钮；底栏是「断开连接 / 返回」。
      */
     @Override
     protected void initContent() {
@@ -85,7 +102,8 @@ public class RoomInfoScreen extends EnderBaseScreen {
 
     /**
      * 每帧更新。
-     * 定期检查后端状态。
+     *
+     * 按 1 秒节流轮询后端状态，结果回到主线程后再刷新界面。
      */
     @Override
     public void tick() {
@@ -104,14 +122,23 @@ public class RoomInfoScreen extends EnderBaseScreen {
         }
     }
 
+    /**
+     * 渲染界面，透传给基类实现。
+     *
+     * @param guiGraphics 绘图上下文，不能为 null
+     * @param mouseX 鼠标 X 坐标，单位为逻辑像素
+     * @param mouseY 鼠标 Y 坐标，单位为逻辑像素
+     * @param partialTick 当前帧的部分刻进度，取值 0.0..1.0
+     */
     @Override
     public void render(@NotNull GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
         super.render(guiGraphics, mouseX, mouseY, partialTick);
     }
 
     /**
-     * 立即检查状态。
-     * 如果有动态端口，则获取最新状态。
+     * 立即检查一次状态。
+     *
+     * 进入界面时调用，跳过 1 秒节流以便首帧就有数据；无动态端口说明后端不可达，直接返回。
      */
     private void checkStateImmediately() {
         if (!EnderApiClient.hasDynamicPort()) {
@@ -129,9 +156,12 @@ public class RoomInfoScreen extends EnderBaseScreen {
 
     /**
      * 更新后端状态显示。
-     * 解析 JSON 状态并更新 UI 文本。
      *
-     * @param stateJson 状态 JSON 字符串
+     * 把后端状态码映射到语言键后取本地化文案；未知状态码原样展示。解析失败时保留旧文案。
+     *
+     * 副作用：内容有变化时会重新调用 {@code init} 重建控件，因此不要在渲染路径中调用。
+     *
+     * @param stateJson 状态 JSON 字符串；与上次相同时本方法直接返回
      */
     private void updateBackendState(String stateJson) {
         if (stateJson == null || stateJson.equals(this.lastStateRaw)) {
@@ -175,8 +205,10 @@ public class RoomInfoScreen extends EnderBaseScreen {
     /**
      * 从状态 JSON 中提取成员列表。
      *
-     * @param json 状态 JSON 对象
-     * @return 成员名称列表
+     * 优先读 {@code profiles[].name}，退回读 {@code players[]} 的字符串元素。
+     *
+     * @param json 状态 JSON 对象，允许为 null
+     * @return 成员名称列表，永不为 null，可能为空
      */
     private java.util.List<String> extractMembers(JsonObject json) {
         java.util.List<String> members = new java.util.ArrayList<>();

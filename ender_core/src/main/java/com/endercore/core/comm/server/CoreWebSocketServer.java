@@ -1,3 +1,8 @@
+/*
+ * 本文件属于 EnderOnline 通信层。
+ *
+ * 职责：WebSocket 服务端的默认实现，负责监听、请求分发、事件分发与事件广播。
+ */
 package com.endercore.core.comm.server;
 
 import com.endercore.core.comm.exception.CoreProtocolException;
@@ -27,30 +32,52 @@ import java.util.function.Consumer;
 
  
 /**
- * 核心 WebSocket 服务器实现。
- * 负责处理 WebSocket 连接、请求分发、事件广播以及连接管理。
+ * WebSocket 服务端实现。
  *
- * @author Ender Developer
- * @version 1.0
+ * 负责监听端口、按 kind 把请求分发给处理器、把事件分发给事件处理器，并支持向单个或全部连接广播事件。
+ *
+ * 设计约束：
+ * 1. 处理器与事件处理器按 kind 唯一注册，重复注册同一 kind 会覆盖旧处理器。
+ * 2. 请求在 handlerExecutor 上执行；处理器返回 null 或抛出异常都会回送状态码 255 的响应。
+ * 3. 未注册 kind 的请求直接回送状态码 255，不会进入任何处理器；未注册 kind 的事件被静默丢弃。
+ * 4. 只接受二进制帧，收到文本帧即以 1003 关闭连接。
+ *
+ * 线程安全性：处理器表、事件处理器表与连接表均使用 ConcurrentHashMap，支持运行期注册；
+ * 广播与发送方法可并发调用。业务处理器的线程安全由实现方负责，本类不保证同一连接的多个请求串行执行。
+ *
  * @since 1.0
+ * @see CoreRequestHandler
+ * @see CoreEventHandler
+ * @see CoreFrameCodec
  */
 public final class CoreWebSocketServer extends WebSocketServer {
+    /** 帧编解码器，由构造器按 maxFrameBytes 创建，不能为 null。 */
     private final CoreFrameCodec codec;
+    /** 请求处理器表，键为 kind；同一 kind 后注册者覆盖先注册者。 */
     private final ConcurrentHashMap<String, CoreRequestHandler> handlers = new ConcurrentHashMap<>();
+    /** 事件处理器表，键为 kind。 */
     private final ConcurrentHashMap<String, CoreEventHandler> eventHandlers = new ConcurrentHashMap<>();
+    /** 已建立的连接表，键为远端地址，断开时移除。 */
     private final ConcurrentHashMap<InetSocketAddress, WebSocket> connectionsByRemote = new ConcurrentHashMap<>();
+    /** 连接关闭监听器，写少读多，使用写时复制列表。 */
     private final CopyOnWriteArrayList<Consumer<InetSocketAddress>> closeListeners = new CopyOnWriteArrayList<>();
+    /** 请求与事件的处理执行器；构造时若入参为 null 则新建缓存线程池。 */
     private final Executor handlerExecutor;
+    /** 启动完成凭证，在 onStart 回调中完成，供 awaitStarted 等待。 */
     private final CompletableFuture<Void> started = new CompletableFuture<>();
+    /** 运行指标收集器，内部计数器并发安全。 */
     private final ConnectionMetrics metrics = new ConnectionMetrics();
+    /** 当前连接数，onOpen 加一、onClose 减一。 */
     private final AtomicLong connections = new AtomicLong();
 
     /**
-     * 构造函数。
+     * 构造服务端。
      *
-     * @param address 绑定地址
-     * @param maxFrameBytes 最大帧大小（字节）
-     * @param handlerExecutor 处理器执行器，如果为 null 则使用 CachedThreadPool
+     * 只完成依赖装配，不绑定端口；需要由调用方显式调用 start 才开始监听。
+     *
+     * @param address 绑定地址，不能为 null
+     * @param maxFrameBytes 单帧最大字节数，不得小于协议头长度
+     * @param handlerExecutor 请求与事件的处理执行器，允许为 null，为 null 时新建缓存线程池
      */
     public CoreWebSocketServer(InetSocketAddress address, int maxFrameBytes, Executor handlerExecutor) {
         super(address);
@@ -61,8 +88,12 @@ public final class CoreWebSocketServer extends WebSocketServer {
     /**
      * 注册请求处理器。
      *
-     * @param kind 请求类型
-     * @param handler 请求处理器
+     * 幂等性：同一 kind 重复注册会直接覆盖旧处理器，不报错也不返回旧值。
+     *
+     * @param kind 请求种类，形如 namespace:path，不能为 null
+     * @param handler 请求处理器，不能为 null
+     * @throws CoreProtocolException 当 kind 格式非法时抛出
+     * @throws NullPointerException 当 handler 为 null 时抛出
      */
     public void register(String kind, CoreRequestHandler handler) {
         CoreKinds.validate(kind);
@@ -72,8 +103,12 @@ public final class CoreWebSocketServer extends WebSocketServer {
     /**
      * 注册事件处理器。
      *
-     * @param kind 事件类型
-     * @param handler 事件处理器
+     * 幂等性：同一 kind 重复注册会直接覆盖旧处理器，不报错也不返回旧值。
+     *
+     * @param kind 事件种类，形如 namespace:path，不能为 null
+     * @param handler 事件处理器，不能为 null
+     * @throws CoreProtocolException 当 kind 格式非法时抛出
+     * @throws NullPointerException 当 handler 为 null 时抛出
      */
     public void registerEvent(String kind, CoreEventHandler handler) {
         CoreKinds.validate(kind);
@@ -81,10 +116,13 @@ public final class CoreWebSocketServer extends WebSocketServer {
     }
 
     /**
-     * 广播事件给所有连接的客户端。
+     * 向所有已连接客户端广播事件。
      *
-     * @param kind 事件类型
-     * @param payload 事件负载
+     * 帧只编码一次后复用，广播给调用时刻连接表中的全部连接；无法送达的连接没有回执也不重试。
+     *
+     * @param kind 事件种类，形如 namespace:path，不能为 null
+     * @param payload 事件负载，允许为 null，为 null 时按空数组发送
+     * @throws CoreProtocolException 当 kind 格式非法或编码后超过帧长上限时抛出
      */
     public void broadcastEvent(String kind, byte[] payload) {
         CoreKinds.validate(kind);
@@ -93,12 +131,14 @@ public final class CoreWebSocketServer extends WebSocketServer {
     }
 
     /**
-     * 发送事件到指定客户端。
+     * 向指定远端发送事件。
      *
-     * @param remoteAddress 远程地址
-     * @param kind 事件类型
-     * @param payload 事件负载
-     * @return 如果发送成功返回 true，否则返回 false（例如客户端未连接）
+     * @param remoteAddress 目标远端地址，不能为 null
+     * @param kind 事件种类，形如 namespace:path，不能为 null
+     * @param payload 事件负载，允许为 null，为 null 时按空数组发送
+     * @return 目标连接仍在连接表中并已投递时返回 true；该远端不在连接表中时返回 false
+     * @throws CoreProtocolException 当 kind 格式非法或编码后超过帧长上限时抛出
+     * @throws NullPointerException 当 remoteAddress 为 null 时抛出
      */
     public boolean sendEventTo(InetSocketAddress remoteAddress, String kind, byte[] payload) {
         Objects.requireNonNull(remoteAddress, "remoteAddress");
@@ -114,11 +154,16 @@ public final class CoreWebSocketServer extends WebSocketServer {
     }
 
     /**
-     * 发送事件到多个客户端。
+     * 向一组远端发送同一事件。
      *
-     * @param remoteAddresses 远程地址集合
-     * @param kind 事件类型
-     * @param payload 事件负载
+     * 帧只编码一次后复用；集合中已断开的连接与 null 元素都会被静默跳过，因此本方法不保证全员送达，
+     * 也不返回送达数量。
+     *
+     * @param remoteAddresses 目标远端地址集合，不能为 null，元素允许为 null
+     * @param kind 事件种类，形如 namespace:path，不能为 null
+     * @param payload 事件负载，允许为 null，为 null 时按空数组发送
+     * @throws CoreProtocolException 当 kind 格式非法或编码后超过帧长上限时抛出
+     * @throws NullPointerException 当 remoteAddresses 为 null 时抛出
      */
     public void sendEventToMany(Iterable<InetSocketAddress> remoteAddresses, String kind, byte[] payload) {
         Objects.requireNonNull(remoteAddresses, "remoteAddresses");
@@ -137,19 +182,25 @@ public final class CoreWebSocketServer extends WebSocketServer {
     /**
      * 注册连接关闭监听器。
      *
-     * @param listener 监听器
+     * 监听器抛出的异常会被静默忽略，不影响其它监听器，也不会中断关闭流程。
+     *
+     * @param listener 连接关闭监听器，不能为 null，入参为断开连接的远端地址
+     * @throws NullPointerException 当 listener 为 null 时抛出
      */
     public void onConnectionClosed(Consumer<InetSocketAddress> listener) {
         closeListeners.add(Objects.requireNonNull(listener, "listener"));
     }
 
-    @Override
     /**
-     * 当 WebSocket 连接打开时调用。
+     * 连接建立，契约见 WebSocketServer#onOpen。
      *
-     * @param conn WebSocket 连接
-     * @param handshake 握手信息
+     * 连接数加一并按远端地址登记连接；远端地址为 null 时不登记，
+     * 该连接随后无法被 sendEventTo 定向发送。
+     *
+     * @param conn 新建的连接，不能为 null
+     * @param handshake 客户端握手信息，不能为 null
      */
+    @Override
     public void onOpen(WebSocket conn, ClientHandshake handshake) {
         connections.incrementAndGet();
         InetSocketAddress remote = conn.getRemoteSocketAddress();
@@ -158,15 +209,17 @@ public final class CoreWebSocketServer extends WebSocketServer {
         }
     }
 
-    @Override
     /**
-     * 当 WebSocket 连接关闭时调用。
+     * 连接关闭，契约见 WebSocketServer#onClose。
      *
-     * @param conn WebSocket 连接
-     * @param code 关闭代码
-     * @param reason 关闭原因
-     * @param remote 是否由远程关闭
+     * 连接数减一、移除连接登记，并依次通知关闭监听器；远端地址为 null 时只递减计数。
+     *
+     * @param conn 已关闭的连接，允许为 null
+     * @param code WebSocket 关闭码
+     * @param reason 关闭原因文本，允许为 null
+     * @param remote 是否由对端发起关闭
      */
+    @Override
     public void onClose(WebSocket conn, int code, String reason, boolean remote) {
         connections.decrementAndGet();
         InetSocketAddress remoteAddress = conn == null ? null : conn.getRemoteSocketAddress();
@@ -181,13 +234,15 @@ public final class CoreWebSocketServer extends WebSocketServer {
         }
     }
 
-    @Override
     /**
-     * 当接收到二进制消息时调用。
+     * 收到二进制帧，契约见 WebSocketServer#onMessage。
      *
-     * @param conn WebSocket 连接
-     * @param message 二进制消息
+     * 解码失败时按错误类别关闭连接；解码成功后按消息类型分发到请求、事件或心跳处理。
+     *
+     * @param conn 来源连接，不能为 null
+     * @param message 二进制消息，不能为 null
      */
+    @Override
     public void onMessage(WebSocket conn, ByteBuffer message) {
         metrics.onFrameReceived(message.remaining());
         CoreFrame frame;
@@ -210,40 +265,46 @@ public final class CoreWebSocketServer extends WebSocketServer {
         }
     }
 
-    @Override
     /**
-     * 当接收到文本消息时调用。
-     * 本服务器不支持文本帧。
+     * 收到文本帧，契约见 WebSocketServer#onMessage。
      *
-     * @param conn WebSocket 连接
-     * @param message 文本消息
+     * 本服务端只接受二进制帧，收到文本帧即以 1003 关闭连接。
+     *
+     * @param conn 来源连接，不能为 null
+     * @param message 文本消息，不能为 null
      */
+    @Override
     public void onMessage(WebSocket conn, String message) {
         conn.close(1003, "不支持文本帧");
     }
 
-    @Override
     /**
-     * 当发生错误时调用。
+     * 底层连接错误，契约见 WebSocketServer#onError。
      *
-     * @param conn WebSocket 连接
-     * @param ex 异常对象
+     * 实现为空操作：错误统一由随后触发的 onClose 收敛为断开处理，此处不重复上报。
+     *
+     * @param conn 出错连接，允许为 null（监听阶段的错误没有关联连接）
+     * @param ex 底层错误，不能为 null
      */
+    @Override
     public void onError(WebSocket conn, Exception ex) {
     }
 
-    @Override
     /**
-     * 当服务器启动时调用。
+     * 服务端启动完成，契约见 WebSocketServer#onStart。
+     *
+     * 完成 started 凭证，唤醒所有在 awaitStarted 上等待的线程。
      */
+    @Override
     public void onStart() {
         started.complete(null);
     }
 
     /**
-     * 等待服务器启动完成。
+     * 阻塞等待服务端启动完成。
      *
-     * @param timeout 超时时间
+     * @param timeout 等待的最长时间，不能为 null
+     * @throws IllegalStateException 当等待超时或线程被中断时抛出，原因异常保留在 cause 中
      */
     public void awaitStarted(java.time.Duration timeout) {
         try {
@@ -254,10 +315,13 @@ public final class CoreWebSocketServer extends WebSocketServer {
     }
 
     /**
-     * 处理请求帧。
+     * 分发请求帧。
      *
-     * @param conn WebSocket 连接
-     * @param frame 请求帧
+     * 未注册 kind 的请求直接回送状态码 255；已注册时把帧字段与远端地址封装为 CoreRequest 并提交到
+     * handlerExecutor 执行，处理器返回 null 或抛出异常都会转成状态码 255 的响应。
+     *
+     * @param conn 请求来源连接，不能为 null
+     * @param frame 已解码的请求帧，不能为 null
      */
     private void handleRequest(WebSocket conn, CoreFrame frame) {
         CoreKinds.validate(frame.kind());
@@ -287,10 +351,12 @@ public final class CoreWebSocketServer extends WebSocketServer {
     }
 
     /**
-     * 发送响应帧。
+     * 把响应编码为响应帧并写回连接。
      *
-     * @param conn WebSocket 连接
-     * @param response 响应对象
+     * 状态码与 requestId 原样写入帧头，负载不做额外编码。
+     *
+     * @param conn 目标连接，不能为 null
+     * @param response 待发送的响应，不能为 null
      */
     private void sendResponse(WebSocket conn, CoreResponse response) {
         byte[] bytes = codec.encode(new CoreFrame(
@@ -306,10 +372,12 @@ public final class CoreWebSocketServer extends WebSocketServer {
     }
 
     /**
-     * 处理事件帧。
+     * 分发事件帧。
      *
-     * @param conn WebSocket 连接
-     * @param frame 事件帧
+     * 未注册 kind 的事件被静默丢弃；处理器抛出的异常同样被静默忽略，不会回传客户端。
+     *
+     * @param conn 事件来源连接，不能为 null
+     * @param frame 已解码的事件帧，不能为 null
      */
     private void handleEvent(WebSocket conn, CoreFrame frame) {
         CoreKinds.validate(frame.kind());
@@ -327,10 +395,12 @@ public final class CoreWebSocketServer extends WebSocketServer {
     }
 
     /**
-     * 处理心跳帧。
+     * 回应心跳帧。
      *
-     * @param conn WebSocket 连接
-     * @param frame 心跳帧
+     * 回送一个心跳帧，并携带请求帧的 requestId 以便请求方配对。
+     *
+     * @param conn 心跳来源连接，不能为 null
+     * @param frame 已解码的心跳帧，不能为 null
      */
     private void handleHeartbeat(WebSocket conn, CoreFrame frame) {
         byte[] bytes = codec.encode(new CoreFrame(CoreMessageType.HEARTBEAT, (byte) 0, 0, frame.requestId(), "", new byte[0]));
@@ -339,9 +409,11 @@ public final class CoreWebSocketServer extends WebSocketServer {
     }
 
     /**
-     * 获取连接指标快照。
+     * 获取服务端指标快照。
      *
-     * @return 连接指标快照
+     * 快照中的挂起请求数固定为 0：服务端不跟踪请求与响应的配对关系。
+     *
+     * @return 指标快照，永不为 null
      */
     public ConnectionMetricsSnapshot metrics() {
         return metrics.snapshot(0);
@@ -350,7 +422,7 @@ public final class CoreWebSocketServer extends WebSocketServer {
     /**
      * 获取当前连接数。
      *
-     * @return 当前连接数
+     * @return 已建立且未关闭的连接数量，非负
      */
     public long connections() {
         return connections.get();

@@ -1,3 +1,11 @@
+/*
+ * 本文件属于 EnderOnline 单元测试。
+ *
+ * 职责：固化 findAvailablePort 的现有行为，作为 P3 合并端口分配实现时的回归基线。
+ *
+ * 关键约束：本测试固化的是「建议端口」语义，不是「已占用端口」语义；
+ * 已知的 TOCTOU 竞态窗口按缺陷记录，不在测试里绕过或掩盖。
+ */
 package com.multiplayer.ender.logic;
 
 import org.junit.jupiter.api.DisplayName;
@@ -15,16 +23,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * {@link PlatformHelper#findAvailablePort()} 的行为固化测试。
  *
- * <p>背景：{@code findAvailablePort()} 在全库有 3 处重复实现
- * （{@code PlatformHelper} / {@code EnderApiClient} / {@code EasyTierManager}），
- * P3 阶段会合并为唯一的 {@code PortAllocator}。本测试先固化当前行为，
- * 作为合并时的回归基线。</p>
+ * 这组测试守护什么：端口分配的三条契约——返回值落在 1..65535（排除 0）、连续调用几乎不重复、
+ * 且返回瞬间端口确实可绑定。它是 P3 把三处重复实现合并为唯一 PortAllocator 时的回归基线。
  *
- * <p>已知缺陷（记录，不在本测试中修复）：
+ * 已知缺陷（记录，不在本测试中修复）：
  * {@code findAvailablePort()} 采用「打开端口 0 拿号 → 立刻关闭 → 返回号码」的方式，
- * 在返回与调用方真正 bind 之间存在竞态窗口（TOCTOU），
- * 其他进程可能抢先占用该端口。因此它是**建议端口**而不是**已占用端口**。
- * 测试 {@link #returnedPortIsNotCurrentlyBound()} 记录的是「返回时端口空闲」这一事实。</p>
+ * 在返回与调用方真正 bind 之间存在竞态窗口（TOCTOU），其他进程可能抢先占用该端口。
+ * 因此它是**建议端口**而不是**已占用端口**。
+ * 测试 {@link #returnedPortIsNotCurrentlyBound()} 记录的是「返回时端口空闲」这一事实，
+ * 而不是「返回后可安全使用」——合并实现时不要把该断言当成更强保证。
+ *
+ * 注意：本文件的断言消息可保留中文——测试源码已从 i18n 守卫中排除，中文失败信息更易读。
+ *
+ * 线程安全性：每个用例各自建立本地 ServerSocket 探针，无共享可变状态，可并行执行。
+ *
+ * @since 1.0
+ * @see PlatformHelper
  */
 class PlatformHelperTest {
 

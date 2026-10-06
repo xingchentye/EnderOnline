@@ -1,3 +1,8 @@
+/*
+ * 本文件属于 EnderOnline 后端进程管理。
+ *
+ * 职责：拉起 easytier-core 子进程、采集其标准输出、解析对等节点信息并负责停止该进程。
+ */
 package com.endercore.core.easytier;
 
 import org.slf4j.Logger;
@@ -21,92 +26,138 @@ import java.util.Map;
 import java.util.HashMap;
 
 /**
- * EasyTier 进程运行器。
- * 负责启动 EasyTier 进程、监控其输出、解析对等节点信息以及管理进程生命周期。
+ * EasyTier 子进程的运行器。
  *
- * @author Ender Developer
- * @version 1.0
+ * 本类是 easytier-core 进程句柄的唯一所有者：创建、读取输出、停止都由这里完成，
+ * 上层（EasyTierManager）只负责决定何时调用 start / stop，不得绕过本类操作进程。
+ *
+ * 进程生命周期所有权：
+ * 1. 进程句柄保存在 processRef 中，stop 是唯一会主动终止它的入口；
+ *    本类不会注册 JVM 关闭钩子，进程是否被回收取决于调用方是否记得 stop。
+ * 2. start 派生一条非守护线程 "EasyTier-Output" 读取子进程输出，该线程以 stdout 关闭为退出条件。
+ *    stop 不 join 该线程，只依赖流关闭让它自然结束，因此 stop 返回后线程可能仍在收尾。
+ * 3. start 还会派生守护线程 "EasyTier-Poller" 周期性拉起 easytier-cli 子进程，
+ *    这两类派生线程的生命周期都必须与本类的进程生命周期绑定。
+ *
+ * 设计约束：
+ * 1. 进程的 stdout 与 stderr 被合并，节点信息靠对日志文本做子串匹配解析，
+ *    因此 EasyTier 的日志措辞一旦变化，对等节点列表会静默变空而不报错。
+ * 2. isRunning 字段与 isRunning() 方法是两套语义：字段表示「输出读取线程是否还在工作」，
+ *    方法以 process.isAlive() 为准，两者可能短暂不一致，判断进程状态请用方法。
+ * 3. 平台限制：Android（PojavLauncher / Amethyst）上外部进程的启动依赖设备侧已具备可执行环境，
+ *    CLI 子进程同样受此限制。
+ *
+ * 线程安全性：processRef 为 AtomicReference，isRunning 为 volatile，对等节点集合为并发容器，
+ * 单字段访问是安全的。但 start 与 stop 之间没有互斥：两者并发执行会出现「停止后立刻被重新拉起」
+ * 或状态字段互相覆盖，调用方必须在外部串行化启动与停止。
+ *
  * @since 1.0
+ * @see EasyTierManager
  */
 public class EasyTierRunner {
-    /**
-     * 日志记录器
-     */
+
+    /** 本类日志记录器，永不为 null，由 SLF4J 在类初始化时绑定。 */
     private static final Logger LOGGER = LoggerFactory.getLogger(EasyTierRunner.class);
     
     /**
-     * 可执行文件路径
+     * 可执行文件绝对路径。
+     *
+     * 不允许为 null，由构造器注入后不再修改；其父目录会成为子进程的工作目录。
      */
     private final Path executablePath;
     
     /**
-     * 进程引用
+     * 当前子进程句柄。
+     *
+     * 允许为 null：为 null 表示尚未启动过进程；进程结束后仍保留旧句柄直至下次 start 覆盖。
      */
     private final AtomicReference<Process> processRef = new AtomicReference<>();
     
     /**
-     * 运行状态标志
+     * 运行标志，语义是「输出读取线程仍在工作」。
+     *
+     * 由 start 置 true、由输出线程的 finally 与 stop 置 false。
+     * NOTE: 本字段不参与 isRunning() 的判断，两者不可互相替代。
      */
     private volatile boolean isRunning = false;
     
     /**
-     * 对等节点主机名映射表
+     * 对等节点 ID 到主机名的映射。
+     *
+     * 永不为 null，元素按下标周期刷新；不存在的节点会被整体覆盖而不是增量删除。
      */
     private final Map<String, String> peerHostnames = new ConcurrentHashMap<>();
     
     /**
-     * 对等节点IP映射表
+     * 对等节点 ID 到 IP 的映射。
+     *
+     * 永不为 null，与 peerHostnames 在同一轮轮询中一起刷新，两者的键集合可能不同。
      */
     private final Map<String, String> peerIps = new ConcurrentHashMap<>();
     
     /**
-     * 轮询调度器
+     * 轮询调度器。
+     *
+     * 允许为 null：为 null 表示轮询未启动或已停止；由 stopPeerPoller 置回 null。
      */
     private ScheduledExecutorService pollerScheduler;
     
     /**
-     * RPC 端口
+     * 从启动参数解析出的 RPC 端口，默认 11010。
+     *
+     * 取值范围 1 到 65535；解析失败时保持上一次成功的取值，用于 easytier-cli 的连接地址。
      */
     private int rpcPort = 11010; 
 
     /**
-     * 构造函数。
+     * 构造运行器。
      *
-     * @param executablePath EasyTier 可执行文件路径
+     * 构造不做任何 I/O，也不校验文件是否存在，可执行性由 EasyTierManager 在初始化阶段保证。
+     *
+     * @param executablePath 可执行文件路径，不能为 null，其父目录必须存在
      */
     public EasyTierRunner(Path executablePath) {
         this.executablePath = executablePath;
     }
 
     /**
-     * 启动 EasyTier 进程。
+     * 启动 EasyTier 进程，不注入额外环境变量。
      *
-     * @param args 启动参数
-     * @throws IOException 当启动失败时抛出
+     * @param args 启动参数，允许为空数组
+     * @throws IOException 当可执行文件不存在或无法创建进程时抛出
      */
     public void start(String... args) throws IOException {
         start(args, null);
     }
 
     /**
-     * 活跃对等节点列表
+     * 活跃对等节点 ID 列表。
+     *
+     * 永不为 null，元素由输出线程通过日志解析增删；同步列表，但「读取再复制」不是原子操作。
      */
     private final List<String> peerList = Collections.synchronizedList(new ArrayList<>());
     
     /**
-     * 忽略的对等节点列表（基础设施节点）
+     * 已识别为基础设施的中转节点 ID 列表。
+     *
+     * 永不为 null；命中该列表的节点不会出现在 getPeers 的结果中。
      */
     private final List<String> ignoredPeers = Collections.synchronizedList(new ArrayList<>());
     
     /**
-     * 基础设施 URL 列表
+     * 启动参数中声明的基础设施地址（-p / --peers 的取值）。
+     *
+     * 永不为 null；用于在日志里把公共中转节点从「活跃对等节点」中剔除。
      */
     private final List<String> infrastructureUrls = Collections.synchronizedList(new ArrayList<>());
 
     /**
      * 获取活跃对等节点列表。
      *
-     * @return 对等节点 ID 列表
+     * 返回的是副本，调用方修改返回值不会影响内部状态。
+     * 复制过程不是原子的，与输出线程的增删并发时可能拿到稍旧的快照。
+     *
+     * @return 对等节点 ID 列表，永不为 null，可能为空
      */
     public List<String> getPeers() {
         return new ArrayList<>(peerList);
@@ -115,7 +166,7 @@ public class EasyTierRunner {
     /**
      * 获取对等节点主机名映射。
      *
-     * @return 主机名映射表副本
+     * @return 节点 ID 到主机名的映射副本，永不为 null，可能为空
      */
     public Map<String, String> getPeerHostnames() {
         return new HashMap<>(peerHostnames);
@@ -124,18 +175,23 @@ public class EasyTierRunner {
     /**
      * 获取对等节点 IP 映射。
      *
-     * @return IP 映射表副本
+     * @return 节点 ID 到 IP 地址的映射副本，永不为 null，可能为空
      */
     public Map<String, String> getPeerIps() {
         return new HashMap<>(peerIps);
     }
 
     /**
-     * 启动 EasyTier 进程（带环境变量）。
+     * 启动 EasyTier 进程，并派生输出读取线程与对等节点轮询线程。
      *
-     * @param args 启动参数
-     * @param env 环境变量
-     * @throws IOException 当启动失败时抛出
+     * 启动前会清空上一轮采集到的对等节点信息，因此重复启动会造成短暂的列表空窗。
+     * 派生线程不加入任何线程池，其存续完全靠进程生命周期约束。
+     *
+     * 幂等性：本方法不幂等，但内部有防重入判断——已在运行时记录警告并直接返回。
+     *
+     * @param args 启动参数，不能为 null，会被原样追加到可执行文件路径之后
+     * @param env 追加到子进程的环境变量，允许为 null，为 null 时继承当前进程环境
+     * @throws IOException 当创建子进程失败时抛出
      */
     public void start(String[] args, Map<String, String> env) throws IOException {
         if (isRunning()) {
@@ -293,6 +349,12 @@ public class EasyTierRunner {
 
     /**
      * 停止 EasyTier 进程。
+     *
+     * 先优雅终止（destroy），等待约 1 秒后仍未退出则强制终止（destroyForcibly）。
+     * 阻塞语义：本方法至少阻塞 1 秒，且不会等待输出读取线程结束，禁止在渲染或事件线程上调用。
+     * 未启动过进程时是安全的空操作。
+     *
+     * 幂等性：本方法幂等，对已停止的进程重复调用只会把运行标志再置一次 false。
      */
     public void stop() {
         Process process = processRef.get();
@@ -313,9 +375,11 @@ public class EasyTierRunner {
     }
 
     /**
-     * 检查 EasyTier 是否正在运行。
+     * 检查 EasyTier 进程是否正在运行。
      *
-     * @return 如果正在运行则返回 true，否则返回 false
+     * 判据是句柄存活（process.isAlive()），与 isRunning 字段表示的输出线程状态无关。
+     *
+     * @return 已有进程且仍存活时返回 true，否则返回 false
      */
     public boolean isRunning() {
         Process process = processRef.get();
@@ -323,7 +387,10 @@ public class EasyTierRunner {
     }
 
     /**
-     * 启动对等节点信息轮询器。
+     * 启动对等节点轮询线程。
+     *
+     * 调度器为单线程守护线程 "EasyTier-Poller"，首次延迟 2 秒、之后按固定 2 秒间隔执行。
+     * 已在运行（未 shutdown）时直接返回，不会创建第二个调度器。
      */
     private void startPeerPoller() {
         if (pollerScheduler != null && !pollerScheduler.isShutdown()) {
@@ -338,7 +405,10 @@ public class EasyTierRunner {
     }
 
     /**
-     * 停止对等节点信息轮询器。
+     * 停止对等节点轮询线程。
+     *
+     * 使用 shutdownNow 丢弃尚未执行的周期任务，并把调度器引用置回 null。
+     * 允许重复调用，未启动时是空操作。
      */
     private void stopPeerPoller() {
         if (pollerScheduler != null) {
@@ -348,7 +418,11 @@ public class EasyTierRunner {
     }
 
     /**
-     * 通过 EasyTier CLI 获取对等节点详细信息（主机名、IP等）。
+     * 通过 easytier-cli 子进程拉取对等节点的主机名与 IP，并刷新两张映射表。
+     *
+     * 每轮都会整体替换两张映射表，因此某轮解析失败会让已采集到的信息被清空。
+     * CLI 文件不存在时直接返回且保留旧数据，这是「未安装 CLI」与「解析失败」两种情形的区别。
+     * 方法内部吞掉所有异常，失败仅表现为数据不更新。
      */
     private void fetchPeerInfo() {
         if (!isRunning) return;

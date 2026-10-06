@@ -1,3 +1,8 @@
+/*
+ * 本文件属于 EnderOnline 通信层。
+ *
+ * 职责：实现 mc:query_status 请求，按 Minecraft Java 版协议查询目标服务器的状态与延迟。
+ */
 package com.endercore.core.comm.server;
 
 import java.io.ByteArrayInputStream;
@@ -15,12 +20,21 @@ import java.util.Objects;
 import com.endercore.core.comm.protocol.CoreResponse;
 
 /**
- * Minecraft 核心工具类。
- * 提供 Minecraft 服务器状态查询功能的工具类，支持通过 WebSocket 请求查询 Minecraft 服务器状态。
+ * Minecraft 服务器状态查询工具。
  *
- * @author Ender Developer
- * @version 1.0
+ * 以插件形式挂在 CoreWebSocketServer 上：install 注册 mc:query_status 请求，
+ * 收到请求后按 Minecraft Java 版协议握手、读取状态并回送状态 JSON 与网络延迟。
+ *
+ * 设计约束：
+ * 1. 查询是阻塞式 TCP 往返，只应在 handlerExecutor 线程上执行，不得在状态或事件回调中调用。
+ * 2. host、port 与 timeoutMillis 均来自请求负载，必须先通过取值范围校验再建立连接。
+ * 3. 本类不缓存任何连接或中间状态，每次查询新建 Socket 并在返回前关闭。
+ *
+ * 线程安全性：本类无状态，全部方法为静态且不读写共享变量，可被任意线程并发调用。
+ *
  * @since 1.0
+ * @see CoreWebSocketServer
+ * @see CoreRooms
  */
 public final class CoreMinecraft {
     /**
@@ -30,10 +44,12 @@ public final class CoreMinecraft {
     }
 
     /**
-     * 在 CoreWebSocketServer 上注册 Minecraft 查询服务。
-     * 注册 "mc:query_status" 请求处理器。
+     * 在服务端上注册 Minecraft 状态查询服务。
      *
-     * @param server CoreWebSocketServer 实例
+     * 注册 mc:query_status 请求处理器；重复调用只会覆盖同一处理器，不会产生重复注册。
+     *
+     * @param server 目标服务端，不能为 null
+     * @throws NullPointerException 当 server 为 null 时抛出
      */
     public static void install(CoreWebSocketServer server) {
         Objects.requireNonNull(server, "server");
@@ -42,11 +58,13 @@ public final class CoreMinecraft {
 
     /**
      * 处理状态查询请求。
-     * 解析请求参数，查询 Minecraft 服务器状态，并返回 JSON 响应和延迟。
      *
-     * @param req 核心请求对象
-     * @return 核心响应对象
-     * @throws Exception 当查询失败时抛出
+     * 负载支持二进制与字符串两种格式；成功时响应负载为延迟毫秒数（4 字节）+ JSON 长度（4 字节）+ JSON 字节。
+     * 参数解析失败返回状态码 1，查询失败返回状态码 2，两者都以异常文本为负载。
+     * 方法签名保留了 throws Exception，但所有失败路径都已转换为错误响应，实际不会抛出。
+     *
+     * @param req 查询请求，不能为 null
+     * @return 成功时状态码为 0，失败时状态码为 1 或 2，永不为 null
      */
     private static CoreResponse queryStatus(CoreRequest req) throws Exception {
         QueryArgs args;
@@ -79,10 +97,10 @@ public final class CoreMinecraft {
     /**
      * 构建错误响应。
      *
-     * @param req 原始请求
-     * @param status 状态码
-     * @param messageUtf8 错误消息
-     * @return 错误响应对象
+     * @param req 原始请求，不能为 null
+     * @param status 非零错误状态码
+     * @param messageUtf8 错误消息，不能为 null，以 UTF-8 编码为响应负载
+     * @return 错误响应，永不为 null
      */
     private static CoreResponse error(CoreRequest req, int status, String messageUtf8) {
         return new CoreResponse(status, req.requestId(), req.kind(), messageUtf8.getBytes(StandardCharsets.UTF_8));
@@ -90,11 +108,14 @@ public final class CoreMinecraft {
 
     /**
      * 解析查询参数。
-     * 支持二进制格式和字符串格式（Host:Port|Timeout）。
      *
-     * @param payload 请求负载
-     * @return 查询参数对象
-     * @throws Exception 当参数解析失败时抛出
+     * 优先按二进制格式解析，失败后回退为字符串格式 Host:Port|Timeout；
+     * 端口缺省为 25565，超时缺省为 3000 毫秒，IPv6 字面量需写在方括号中。
+     *
+     * @param payload 请求负载，不能为 null，且不能为空数组
+     * @return 解析结果，永不为 null
+     * @throws IllegalArgumentException 当负载为空、主机名为空、端口不在 1 到 65535 之间
+     *                                  或超时不在 1 到 120000 毫秒之间时抛出
      */
     private static QueryArgs parseArgs(byte[] payload) throws Exception {
         if (payload == null || payload.length == 0) {
@@ -148,11 +169,13 @@ public final class CoreMinecraft {
     }
 
     /**
-     * 尝试解析二进制格式的查询参数。
-     * 格式：HostLength(2) + HostBytes + Port(2) + Timeout(4)
+     * 尝试按二进制格式解析查询参数。
      *
-     * @param payload 请求负载
-     * @return 查询参数对象，如果解析失败返回 null
+     * 负载格式：HostLength(2 字节) + HostBytes + Port(2 字节) + Timeout(4 字节)；
+     * 端口为 0 时取 25565，超时为 0 时取 3000 毫秒。
+     *
+     * @param payload 请求负载，不能为 null
+     * @return 解析结果；格式不合法时返回 null，不抛出异常
      */
     private static QueryArgs tryParseBinary(byte[] payload) {
         try {
@@ -182,14 +205,17 @@ public final class CoreMinecraft {
     }
 
     /**
-     * 执行 Minecraft 服务器状态 Ping 操作。
+     * 执行一次 Minecraft 状态查询。
      *
-     * @param host 主机名
-     * @param port 端口
-     * @param timeoutMillis 超时时间
-     * @param pingId Ping ID
-     * @return 查询结果
-     * @throws Exception 当 Ping 失败时抛出
+     * 依次发送握手包与状态请求包、读取状态 JSON，再以 pingId 做一次 Ping-Pong 往返测延迟。
+     * 调用方给出的超时同时用于建连与读操作，Socket 在方法返回前必定关闭。
+     *
+     * @param host 目标主机名，不能为 null
+     * @param port 目标端口，取值 1 到 65535
+     * @param timeoutMillis 建连与读取超时，单位毫秒，取值 1 到 120000
+     * @param pingId Ping 载荷，用于校验 Pong 是否配对
+     * @return 状态 JSON 与实测往返时延，永不为 null
+     * @throws Exception 当建连、读写失败或对端返回非预期报文时抛出
      */
     private static QueryResult ping(String host, int port, long timeoutMillis, long pingId) throws Exception {
         try (Socket socket = new Socket()) {
@@ -216,10 +242,12 @@ public final class CoreMinecraft {
     /**
      * 发送握手包。
      *
-     * @param out 输出流
-     * @param host 主机名
-     * @param port 端口
-     * @throws Exception 当发送失败时抛出
+     * 协议版本固定为 765，握手后的下一状态固定为 1（状态查询）。
+     *
+     * @param out 输出流，不能为 null
+     * @param host 目标主机名，不能为 null
+     * @param port 目标端口
+     * @throws Exception 当写入失败时抛出
      */
     private static void sendHandshake(OutputStream out, String host, int port) throws Exception {
         ByteArrayOutputStream body = new ByteArrayOutputStream();
@@ -327,9 +355,11 @@ public final class CoreMinecraft {
     /**
      * 读取 Minecraft 字符串。
      *
-     * @param in 输入流
-     * @return 字符串
-     * @throws Exception 当读取失败时抛出
+     * 格式为 VarInt 长度加 UTF-8 字节，长度上限为 1048576 字节。
+     *
+     * @param in 数据输入流，不能为 null
+     * @return 解码后的字符串，永不为 null，长度为 0 时返回空串
+     * @throws Exception 当读取失败、长度超出上限或长度字段为负时抛出
      */
     private static String readMcString(DataInputStream in) throws Exception {
         int len = readVarInt(in);
@@ -342,10 +372,12 @@ public final class CoreMinecraft {
     }
 
     /**
-     * 写入 VarInt。
+     * 以 Minecraft VarInt 格式写入整数。
      *
-     * @param out 输出流
-     * @param value 整数值
+     * VarInt 为小端 7 位分组编码，每字节最高位表示是否还有后续字节，最多占 5 字节。
+     *
+     * @param out 输出流，不能为 null
+     * @param value 待写入的整数值，允许为负
      */
     private static void writeVarInt(ByteArrayOutputStream out, int value) {
         int v = value;
@@ -357,11 +389,11 @@ public final class CoreMinecraft {
     }
 
     /**
-     * 读取 VarInt。
+     * 从字节流读取 VarInt。
      *
-     * @param in 输入流
-     * @return 整数值
-     * @throws Exception 当读取失败时抛出
+     * @param in 输入流，不能为 null
+     * @return 解码出的整数值，可能为负
+     * @throws Exception 当流提前结束抛出 EOFException，或编码超过 5 字节时抛出
      */
     private static int readVarInt(InputStream in) throws Exception {
         int numRead = 0;
@@ -383,11 +415,11 @@ public final class CoreMinecraft {
     }
 
     /**
-     * 读取 VarInt (DataInputStream)。
+     * 从数据输入流读取 VarInt。
      *
-     * @param in 输入流
-     * @return 整数值
-     * @throws Exception 当读取失败时抛出
+     * @param in 数据输入流，不能为 null
+     * @return 解码出的整数值，可能为负
+     * @throws Exception 当流提前结束或编码超过 5 字节时抛出
      */
     private static int readVarInt(DataInputStream in) throws Exception {
         int numRead = 0;
@@ -408,10 +440,12 @@ public final class CoreMinecraft {
     /**
      * 读取指定长度的字节。
      *
-     * @param in 输入流
-     * @param len 长度
-     * @return 字节数组
-     * @throws Exception 当读取失败时抛出
+     * 循环读取直到填满目标数组，遇到流结束抛出 EOFException 而不是返回短数组。
+     *
+     * @param in 输入流，不能为 null
+     * @param len 待读取字节数，不能为负
+     * @return 长度为 len 的字节数组，永不为 null
+     * @throws Exception 当流提前结束或 len 为负时抛出
      */
     private static byte[] readFully(InputStream in, int len) throws Exception {
         if (len < 0) {
@@ -430,19 +464,24 @@ public final class CoreMinecraft {
     }
 
     /**
-     * 查询参数类。
+     * 查询参数。
+     *
+     * 仅在 parseArgs 与 ping 之间传递中间态，构造后不再修改。
      */
     private static final class QueryArgs {
+        /** 目标主机名，不能为 null。 */
         private final String host;
+        /** 目标端口，取值 1 到 65535。 */
         private final int port;
+        /** 建连与读取超时，单位毫秒，取值 1 到 120000。 */
         private final long timeoutMillis;
 
         /**
-         * 构造函数。
+         * 构造查询参数。
          *
-         * @param host 主机名
-         * @param port 端口
-         * @param timeoutMillis 超时时间
+         * @param host 目标主机名，不能为 null
+         * @param port 目标端口，取值 1 到 65535
+         * @param timeoutMillis 建连与读取超时，单位毫秒，取值 1 到 120000
          */
         private QueryArgs(String host, int port, long timeoutMillis) {
             this.host = host;
@@ -452,17 +491,21 @@ public final class CoreMinecraft {
     }
 
     /**
-     * 查询结果类。
+     * 查询结果。
+     *
+     * 仅在 ping 与 queryStatus 之间传递中间态，构造后不再修改。
      */
     private static final class QueryResult {
+        /** 状态响应 JSON，不能为 null。 */
         private final String json;
+        /** 实测往返时延，单位毫秒，非负。 */
         private final long latencyMillis;
 
         /**
-         * 构造函数。
+         * 构造查询结果。
          *
-         * @param json 状态响应 JSON
-         * @param latencyMillis 延迟（毫秒）
+         * @param json 状态响应 JSON，不能为 null
+         * @param latencyMillis 实测往返时延，单位毫秒，非负
          */
         private QueryResult(String json, long latencyMillis) {
             this.json = json;

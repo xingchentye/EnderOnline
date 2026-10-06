@@ -1,3 +1,10 @@
+/*
+ * 本文件属于 EnderOnline NeoForge 适配层。
+ *
+ * 职责：连接成功后的展示界面，提供聊天输入与断开入口。
+ *
+ * 关键约束：关闭时必须关闭 NetworkClient，保证会话不泄漏。
+ */
 package com.multiplayer.ender.client.gui;
 
 import com.multiplayer.ender.network.NetworkClient;
@@ -9,22 +16,30 @@ import net.minecraft.network.chat.Component;
 
 /**
  * 末影联机大厅界面。
- * 提供简单的聊天和状态展示功能。
  *
- * @author Ender Developer
- * @version 1.0
+ * 由 {@code NetworkHandler#connectToServer} 在连接成功后跳入，用来确认「已经连上了」。
+ *
+ * 设计约束：
+ * 1. 聊天框与发送按钮按屏幕底部定位，重排时重新计算坐标，不做固定像素布局。
+ * 2. 发送按钮当前只清空输入框，聊天消息尚未接入协议；接入前不得让玩家误以为消息已送达。
+ * 3. {@link #onClose()} 必须关闭 {@link NetworkClient}，否则连接会随界面关闭而泄漏。
+ *
+ * 线程安全性：字段只在客户端主线程读写，无并发保护。
+ *
  * @since 1.0
+ * @see NetworkClient
  */
 public class LobbyScreen extends EnderBaseScreen {
-    /** 聊天输入框 */
+    /** 聊天输入框；在 {@link #initContent()} 中创建，之前为 null，最大 256 字符。 */
     private EditBox chatBox;
-    /** 发送按钮 */
+
+    /** 发送按钮；在 {@link #initContent()} 中创建，之前为 null。 */
     private Button sendBtn;
 
     /**
-     * 构造函数。
+     * 构造大厅界面。
      *
-     * @param parent 父屏幕
+     * @param parent 父屏幕，用于返回，允许为 null
      */
     public LobbyScreen(Screen parent) {
         super(Component.translatable("menu.ender_online.lobby.title"), parent);
@@ -32,7 +47,8 @@ public class LobbyScreen extends EnderBaseScreen {
 
     /**
      * 初始化界面内容。
-     * 创建聊天框和按钮。
+     *
+     * 底栏放「断开连接」，内容区下方自绘聊天输入框与发送按钮（不使用布局，便于贴屏幕底边）。
      */
     @Override
     protected void initContent() {
@@ -55,7 +71,8 @@ public class LobbyScreen extends EnderBaseScreen {
 
     /**
      * 重新排列元素。
-     * 确保聊天框和按钮位于底部。
+     *
+     * 先让基类排布布局，再按新的屏幕宽高把聊天框与发送按钮贴回底部。
      */
     @Override
     protected void repositionElements() {
@@ -71,6 +88,16 @@ public class LobbyScreen extends EnderBaseScreen {
         }
     }
 
+    /**
+     * 渲染界面。
+     *
+     * 在原版渲染之上画一行欢迎文案。
+     *
+     * @param guiGraphics 绘图上下文，不能为 null
+     * @param mouseX 鼠标 X 坐标，单位为逻辑像素
+     * @param mouseY 鼠标 Y 坐标，单位为逻辑像素
+     * @param partialTick 当前帧的部分刻进度，取值 0.0..1.0
+     */
     @Override
     public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
         super.render(guiGraphics, mouseX, mouseY, partialTick);
@@ -80,7 +107,8 @@ public class LobbyScreen extends EnderBaseScreen {
 
     /**
      * 关闭屏幕。
-     * 断开网络连接并返回。
+     *
+     * 先关闭底层网络会话，再回到父屏幕，避免连接残留。
      */
     @Override
     public void onClose() {

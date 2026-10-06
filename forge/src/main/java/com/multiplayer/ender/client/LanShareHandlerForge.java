@@ -1,3 +1,10 @@
+/*
+ * 本文件属于 EnderOnline Forge 适配层。
+ *
+ * 职责：改造「对局域网开放」屏幕，让玩家可以选择经末影联机托管本地端口。
+ *
+ * 入口通过 ScreenEvent.Init.Post 注入并替换原版按钮，用于替代已终止的 Fabric Mixin 方案。
+ */
 package com.multiplayer.ender.client;
 
 import java.util.concurrent.CompletableFuture;
@@ -25,14 +32,44 @@ import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
 /**
- * 局域网分享屏幕处理器（Forge）。
- * 劫持“对局域网开放”屏幕，允许用户选择通过末影联机进行托管。
+ * 局域网分享屏幕入口处理器（Forge）。
+ *
+ * 属于「对局域网开放」页面：屏幕初始化后添加「末影联机: 开/关」切换按钮，
+ * 并将原版「开放到局域网」按钮隐藏，用同尺寸同位置的新按钮取而代之。
+ * 新按钮先执行原版逻辑（真正开放局域网并生成端口），再按开关状态把端口交给后端托管。
+ *
+ * 设计约束：
+ * 1. 入口通过 ScreenEvent.Init.Post 注入，不使用 Mixin——Fabric 支持已终止（ADR-00），
+ *    两端统一走加载器事件。
+ * 2. 原版按钮靠文案匹配（含 "LAN" 或 "局域网"）定位，属于对原版文案的脆弱依赖：
+ *    原版改文案或换语言即会静默失效，此时不替换按钮，只保留托管开关。
+ * 3. 作弊权限通过反射读取，成因见 onScreenInit 内的兼容分支说明。
+ *
+ * 线程安全性：onScreenInit 在客户端主线程执行；startEnderHosting 的 thenAccept 回调
+ * 在 EnderApiClient 的回调线程，聊天消息与界面切换均已用 execute 切回主线程。
+ * enableEnder 为静态可变状态，只被主线程上的切换按钮与点击回调读写。
+ *
+ * @see ClientSetupForge#handleRoomCodeNotification(String)
  */
 @Mod.EventBusSubscriber(modid = "ender_online", value = Dist.CLIENT, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public class LanShareHandlerForge {
+    /** 末影联机托管开关，默认 false；仅表达界面意图，点击开始后才真正生效。 */
     private static boolean enableEnder = false;
+
+    /**
+     * JSON 解析器。
+     *
+     * 当前类内已无使用点，属于待清理的遗留字段。
+     */
     private static final Gson GSON = new Gson();
-    /** 房间状态轮询线程池 */
+
+    /**
+     * 房间状态轮询线程池。
+     *
+     * 单线程守护线程，进程结束即终止；当前类内已无提交点，属于历史遗留的空执行器。
+     *
+     * TODO(P4, 2026-09-30): 确认无外部引用后删除本字段与不再使用的 GSON 字段及相关 import。
+     */
     private static final ScheduledExecutorService ROOM_POLL_EXECUTOR = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "Ender-Room-Poll");
         thread.setDaemon(true);
@@ -40,14 +77,20 @@ public class LanShareHandlerForge {
     });
 
     /**
-     * 屏幕初始化后事件。
-     * 在 ShareToLanScreen 中添加开关按钮，并替换原有的“开放”按钮逻辑。
+     * 屏幕初始化完成后的回调。
      *
-     * @param event 屏幕初始化事件
+     * 仅对 ShareToLanScreen 生效：注册托管开关按钮，并按文案定位原版「开放到局域网」
+     * 按钮（找到才替换，找不到则保留原按钮且不做托管）。
+     *
+     * 替换按钮的点击流程：先调用原按钮逻辑真正开放局域网，再在开关打开且单人服务器
+     * 已发布时读取作弊开关与默认游戏模式，换算成访客权限后交给后端托管。
+     *
+     * @param event 屏幕初始化事件，由 Forge 注入，不能为 null
      */
     @SubscribeEvent
     public static void onScreenInit(ScreenEvent.Init.Post event) {
         if (event.getScreen() instanceof ShareToLanScreen screen) {
+            // 右上角对齐：按钮贴右边缘留 5px 边距，y=5 与多人菜单入口保持同一视觉基线
             int width = screen.width;
             int buttonWidth = 120;
             int x = width - buttonWidth - 5;
@@ -82,6 +125,10 @@ public class LanShareHandlerForge {
                     if (enableEnder && mc.getSingleplayerServer() != null && mc.getSingleplayerServer().isPublished()) {
                         int port = mc.getSingleplayerServer().getPort();
                         
+                        // NOTE: 这组兼容分支来自 Fabric 时期同时支持 Yarn 与 Mojmap 两套映射：
+                        // 同一语义在 Yarn 下叫 areCheatsAllowed，在 Mojmap 下叫 isAllowCheatsForAllPlayers。
+                        // Fabric 支持终止后两端已统一使用官方映射，回退链已无存在必要。
+                        // TODO(ADR-03, 2026-09-30): 删除兼容分支，直接调用 Mojmap 方法并显式处理失败。
                         boolean allowCheats = false;
                         try {
                             Object playerList = mc.getSingleplayerServer().getPlayerList();
@@ -100,7 +147,7 @@ public class LanShareHandlerForge {
                         if (gameMode == net.minecraft.world.level.GameType.SPECTATOR) {
                             visitorPermission = "仅观战";
                         } else if (gameMode == net.minecraft.world.level.GameType.ADVENTURE) {
-                            
+                            // 冒险模式不降级权限：保留默认的「可交互」，此分支为空是有意为之
                         }
                         
                         EnderApiClient.setLocalSettings(allowCheats, visitorPermission);
@@ -123,6 +170,14 @@ public class LanShareHandlerForge {
         }
     }
 
+    /**
+     * 请求后端开始托管并处理结果。
+     *
+     * 后端未分配动态端口时直接输出错误提示并返回；否则异步发起托管，
+     * 成功拿到房间号后切回主线程弹出提示，失败则在聊天栏输出错误原因。
+     *
+     * @param port 已开放到局域网的本地端口，取值来自 IntegratedServer#getPort
+     */
     private static void startEnderHosting(int port) {
         Minecraft mc = Minecraft.getInstance();
 
