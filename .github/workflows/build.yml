@@ -1,76 +1,1413 @@
 name: Build
 
-# 三段式流水线，顺序有讲究：
-#   guards（秒级，先失败最省时间）→ test（分钟级，纯 Java，不需网络与游戏环境）→ build（最贵，两端矩阵）
-#
-# 为什么 test 与 build 分开：
-#   forge/neoforge 的构建在**配置阶段**就要解析 Minecraft 依赖，在部分网络/平台上会失败。
-#   把它与「与 Minecraft 无关的 ender_core 单元测试」解耦后，
-#   即使加载器构建因网络问题失败，测试结果依然可见、依然能拦住回归。
-#
-# 为什么用 scripts/run-core-tests.ps1 而不是 ./gradlew :ender_core:test：
-#   同上的解耦目的；该脚本只需要 JDK 与 Gradle 缓存里的 JUnit jar。
-
 on: [push, pull_request]
 
 jobs:
   guards:
-    name: 质量守卫（棘轮）
+    name: Quality guards
     runs-on: windows-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: 运行全部守卫
+      - name: Run guards
         shell: pwsh
-        run: ./scripts/guards/run-all.ps1
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $script:RepoRoot = (Get-Location).Path
+          $Results = New-Object System.Collections.ArrayList
+          
+          $script:InlineAllowlists = @{
+              'atomic-writes' = @(
+              )
+              'comment-standard' = @(
+              )
+              'dependency-single-source' = @(
+              )
+              'duplicate-classes' = @(
+                  @{ Path = 'forge/src/main/java/com/multiplayer/ender/MinecraftEnderForge.java'; Line = 0; Reason = 'Forge 入口点，加载器 API 不同，允许两端各自实现' }
+                  @{ Path = 'neoforge/src/main/java/com/multiplayer/ender/MinecraftEnder.java'; Line = 0; Reason = 'NeoForge 入口点，加载器 API 不同，允许两端各自实现' }
+                  @{ Path = 'fabric/src/main/java/com/multiplayer/ender/fabric/MinecraftEnder.java'; Line = 0; Reason = 'Fabric 入口点（P1 删除 Fabric 时一并移除）' }
+                  @{ Path = 'forge/src/main/java/com/multiplayer/ender/client/ClientSetupForge.java'; Line = 0; Reason = 'Forge 客户端初始化，事件系统与 NeoForge 不同' }
+                  @{ Path = 'neoforge/src/main/java/com/multiplayer/ender/client/ClientSetup.java'; Line = 0; Reason = 'NeoForge 客户端初始化，事件系统与 Forge 不同' }
+                  @{ Path = 'neoforge/src/main/java/com/multiplayer/ender/MinecraftEnderClient.java'; Line = 0; Reason = 'NeoForge 客户端入口' }
+                  @{ Path = 'fabric/src/client/java/com/multiplayer/ender/fabric/MinecraftEnderClient.java'; Line = 0; Reason = 'Fabric 客户端入口（P1 删除 Fabric 时一并移除）' }
+                  @{ Path = 'forge/src/main/java/com/multiplayer/ender/client/ui/platform/ForgeRendererImpl.java'; Line = 0; Reason = '渲染桥的加载器实现' }
+                  @{ Path = 'neoforge/src/main/java/com/multiplayer/ender/client/ui/platform/NeoForgeRendererImpl.java'; Line = 0; Reason = '渲染桥的加载器实现' }
+                  @{ Path = 'fabric/src/client/java/com/multiplayer/ender/client/ui/platform/FabricRendererImpl.java'; Line = 0; Reason = '渲染桥的加载器实现（P1 删除 Fabric 时一并移除）' }
+                  @{ Path = 'forge/src/main/java/com/multiplayer/ender/ConfigForge.java'; Line = 0; Reason = '配置后端；P8 统一为 ModConfigForge/ModConfigNeoForge 后仍属适配层' }
+                  @{ Path = 'neoforge/src/main/java/com/multiplayer/ender/Config.java'; Line = 0; Reason = '配置后端；P8 统一为 ModConfigForge/ModConfigNeoForge 后仍属适配层' }
+                  @{ Path = 'neoforge/src/main/java/com/multiplayer/ender/network/NetworkHandler.java'; Line = 0; Reason = 'NeoForge 网络事件注册，加载器 API 专属' }
+                  @{ Path = 'forge/src/main/java/com/multiplayer/ender/client/MultiplayerMenuHandlerForge.java'; Line = 0; Reason = 'Forge 多人菜单入口注入，加载器事件 API 专属' }
+                  @{ Path = 'neoforge/src/main/java/com/multiplayer/ender/client/MultiplayerMenuHandler.java'; Line = 0; Reason = 'NeoForge 多人菜单入口注入，加载器事件 API 专属' }
+              )
+              'empty-catch' = @(
+              )
+              'error-leak' = @(
+              )
+              'executor-lifecycle' = @(
+              )
+              'file-size' = @(
+                  @{ Path = 'ender_common/src/main/java/com/multiplayer/ender/client/gui/EnderDashboard.java'; Line = 0; Reason = 'P3 拆为 5 页 + 5 VM 后删除本条（P1-c 已合并两份副本为共享版本，行数由 2583 降到 2421）' }
+                  @{ Path = 'ender_core/src/main/java/com/multiplayer/ender/network/EnderApiClient.java'; Line = 0; Reason = 'P3 拆为 6 类后删除本条' }
+                  @{ Path = 'ender_core/src/main/java/com/endercore/core/comm/server/CoreRooms.java'; Line = 0; Reason = 'P3 拆为 4 类后删除本条' }
+                  @{ Path = 'ender_core/src/main/java/com/endercore/core/comm/client/CoreWebSocketClient.java'; Line = 0; Reason = 'P3 拆出 ReconnectPolicy/PendingRequests/FrameDispatcher 后删除本条' }
+              )
+              'format' = @(
+              )
+              'hardcoded-strings' = @(
+              )
+              'layout-constants' = @(
+              )
+              'loader-leak' = @(
+              )
+              'no-raw-threads' = @(
+                  @{ Path = 'ender_core/src/main/java/com/endercore/core/comm/EnderExecutors.java'; Line = 0; Reason = '线程工厂本身（ADR-06 §6 允许的创建点）' }
+                  @{ Path = 'ender_core/src/main/java/com/endercore/core/comm/EnderLifecycle.java'; Line = 0; Reason = 'JVM shutdown hook 注册与关闭触发（02-performance-plan §6）' }
+              )
+              'reflective-lookup' = @(
+              )
+              'static-state' = @(
+              )
+          }
+          
+          $script:InlineBaseline = @'
+          {
+            "generatedAt": "2026-10-06",
+            "commit": "ec10c51",
+            "scope": "forge+neoforge",
+            "guards": {
+              "atomic-writes": { "value": 0, "target": 0, "note": "0 个文件已有原子写；0 个在 allowlist" },
+              "comment-standard": { "value": 0, "target": 0, "note": "缺文件头 0 / @author 0 / @version 0 / HTML 0" },
+              "dependency-single-source": { "value": 3, "target": 0, "note": "libs.versions.toml 已存在" },
+              "duplicate-classes": { "value": 1, "target": 0, "note": "" },
+              "empty-catch": { "value": 42, "target": 0, "note": "空块 6 / ignored 命名 35 / printStackTrace 1；9 处有 ignore-reason 或在白名单" },
+              "error-leak": { "value": 2, "target": 0, "note": "扫描 32 个 UI 文件" },
+              "executor-lifecycle": { "value": 0, "target": 0, "note": "4 个文件有清理路径；0 个在 allowlist" },
+              "file-size": { "value": 0, "target": 0, "note": "最大 2422 行；3 个超标文件在白名单" },
+              "format": { "value": 515, "target": 0, "note": "BOM 0 / tab 0 / 超宽 135 / 尾随空白 380" },
+              "hardcoded-strings": { "value": 449, "target": 0, "note": "最集中: ender_common/src/main/java/com/multiplayer/ender/client/gui/EnderDashboard.java(159), ender_common/src/main/java/com/multiplayer/ender/client/gui/StartupScreen.java(25), ender_common/src/main/java/com/multiplayer/ender/client/gui/RoomSettingsScreen.java(25), neoforge/src/main/java/com/multiplayer/ender/client/InGameMenuHandler.java(20), forge/src/main/java/com/multiplayer/ender/client/InGameMenuHandlerForge.java(20)" },
+              "lang-keys": { "value": 2, "target": 0, "note": "代码引用 35 个 ender.* 键" },
+              "layout-constants": { "value": 5, "target": 0, "note": "扫描 32 个 UI 文件" },
+              "loader-leak": { "value": 0, "target": 0, "note": "扫描 91 个文件（ender_core + ender_common）" },
+              "raw-threads": { "value": 0, "target": 6, "note": "；4 处在白名单" },
+              "reflective-lookup": { "value": 31, "target": 0, "note": "最集中: RoomHostLogic.java(11), EnderDashboard.java(9), PlatformRenderers.java(7), LanShareHandler.java(2), LanShareHandlerForge.java(2)" },
+              "static-state": { "value": 48, "target": 10, "note": "最集中: EnderApiClient.java(14), ClientSetup.java(6), ClientSetupForge.java(6), InGameMenuHandler.java(3), EnderDashboard.java(3)" }
+            }
+          }
+          '@
+          
+          $ErrorActionPreference = 'Stop'
+          $script:RepoRoot = ''
+          function Get-RepoRoot {
+              if ($script:RepoRoot -ne '') { return $script:RepoRoot }
+              $script:RepoRoot = (Get-Location).Path
+              return $script:RepoRoot
+          }
+          function Get-BaselinePath {
+              Join-Path (Get-RepoRoot) 'scripts\guards\baseline.json'
+          }
+          function Get-AllowlistPath {
+              param([Parameter(Mandatory = $true)][string]$Name)
+              $key = $Name -replace '\.allowlist$', ''
+              if ($script:InlineAllowlists.ContainsKey($key)) { return $script:InlineAllowlists[$key] }
+              return $null
+          }
+          function Get-SourceFiles {
+              param(
+                  [string[]] $Include = @('*.java'),
+                  [string[]] $ExcludeDirPattern = @('\\build\\', '\\\.gradle\\', '\\\.git\\', '\\run\\', '\\\.idea\\', '\\config\\')
+              )
+              $root = Get-RepoRoot
+              $all = Get-ChildItem -Path $root -Recurse -File -Include $Include -ErrorAction SilentlyContinue
+              $result = @()
+              foreach ($f in $all) {
+                  $skip = $false
+                  foreach ($p in $ExcludeDirPattern) {
+                      if ($f.FullName -match $p) { $skip = $true; break }
+                  }
+                  if (-not $skip) { $result += $f }
+              }
+              return $result
+          }
+          function Get-RelPath {
+              param([Parameter(Mandatory = $true)][string]$FullPath)
+              $root = (Get-RepoRoot) + '\'
+              if ($FullPath.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
+                  return ($FullPath.Substring($root.Length) -replace '\\', '/')
+              }
+              return ($FullPath -replace '\\', '/')
+          }
+          function Get-SourceFilesInModules {
+              param(
+                  [Parameter(Mandatory = $true)][string[]]$Modules,
+                  [string[]] $Include = @('*.java')
+              )
+              $all = Get-SourceFiles -Include $Include
+              return @($all | Where-Object {
+                  $rel = Get-RelPath -FullPath $_.FullName
+                  foreach ($m in $Modules) {
+                      if ($rel.StartsWith("$m/")) { return $true }
+                  }
+                  return $false
+              })
+          }
+          function Read-Utf8Text {
+              param([Parameter(Mandatory = $true)][string]$Path)
+              try {
+                  return [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+              } catch {
+                  return ''
+              }
+          }
+          function Get-Lines {
+              param([Parameter(Mandatory = $true)][string]$Text)
+              return ($Text -split "`r?`n")
+          }
+          function Get-CodeOnlyText {
+              param([string]$Text)
+              if ($null -eq $Text) { return '' }
+              $t = [regex]::Replace($Text, '/\*.*?\*/', '', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+              $sb = New-Object System.Text.StringBuilder
+              foreach ($line in ($t -split "`r?`n")) {
+                  [void]$sb.AppendLine([regex]::Replace($line, '//.*$', ''))
+              }
+              return $sb.ToString()
+          }
+          function Get-Baseline {
+              $p = Get-BaselinePath
+              if (-not (Test-Path $p)) { return $null }
+              $raw = Read-Utf8Text -Path $p
+              if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+              try { return (ConvertFrom-Json $raw) } catch { return $null }
+          }
+          function Test-HasProperty {
+              param($Object, [string]$Name)
+              if ($null -eq $Object) { return $false }
+              $names = @($Object.PSObject.Properties | ForEach-Object { $_.Name })
+              return ($names -contains $Name)
+          }
+          function Get-BaselineValue {
+              param([Parameter(Mandatory = $true)][string]$Name)
+              $b = Get-Baseline
+              if (-not (Test-HasProperty -Object $b -Name 'guards')) { return $null }
+              $g = $b.guards
+              if (-not (Test-HasProperty -Object $g -Name $Name)) { return $null }
+              $entry = $g.$Name
+              if ($null -eq $entry) { return $null }
+              if (Test-HasProperty -Object $entry -Name 'value') { return [int]$entry.value }
+              return [int]$entry
+          }
+          function Get-Allowlist {
+              param([Parameter(Mandatory = $true)][string]$Name)
+              $entries = Get-AllowlistPath -Name $Name
+              if ($null -eq $entries) { return @() }
+              $result = @()
+              foreach ($e in $entries) {
+                  if ([string]::IsNullOrWhiteSpace($e.Reason)) {
+                      Write-Host ('ALLOWLIST-WARN {0}: missing reason for {1}' -f $Name, $e.Path) -ForegroundColor Yellow
+                      continue
+                  }
+                  $result += [pscustomobject]@{
+                      Path   = ($e.Path -replace '\\\\', '/')
+                      Line   = [int]$e.Line
+                      Reason = $e.Reason
+                  }
+              }
+              return $result
+          }
+          function Test-Allowlisted {
+              param(
+                  $Allowlist,
+                  [Parameter(Mandatory = $true)][string]$RelPath,
+                  [int]$Line = 0
+              )
+              if ($null -eq $Allowlist) { return $false }
+              foreach ($a in $Allowlist) {
+                  if ($a.Path -eq $RelPath) {
+                      if ($a.Line -le 0 -or $a.Line -eq $Line) { return $true }
+                  }
+              }
+              return $false
+          }
+          function Write-GuardResult {
+              param(
+                  [Parameter(Mandatory = $true)]$Results,
+                  [Parameter(Mandatory = $true)][string]$Name,
+                  [Parameter(Mandatory = $true)][int]$Violations,
+                  [int]$Target = -1,
+                  [string]$Note = '',
+                  $Details = @()
+              )
+              if ($null -eq $Details) { $Details = @() }
+              $detailsArr = @($Details)
+              $baseline = Get-BaselineValue -Name $Name
+              $status = 'OK'
+              if ($null -ne $baseline) {
+                  if ($Violations -gt $baseline) { $status = 'REGRESS' }
+                  elseif ($Violations -lt $baseline) { $status = 'IMPROVED' }
+              } else {
+                  $status = 'NEW'      # 基线中还没有这一项
+              }
+              [void]$Results.Add([pscustomobject]@{
+                  name       = $Name
+                  violations = $Violations
+                  baseline   = $baseline
+                  target     = $Target
+                  status     = $status
+                  note       = $Note
+              })
+              $baseText = 'n/a'
+              if ($baseline -ne $null) { $baseText = "$baseline" }
+              $color = 'Green'
+              if ($status -eq 'REGRESS') { $color = 'Red' }
+              elseif ($status -eq 'IMPROVED') { $color = 'Cyan' }
+              elseif ($status -eq 'NEW') { $color = 'Yellow' }
+              $line = "GUARD  {0,-22} violations={1,-5} baseline={2,-5} target={3,-5} {4}" -f `
+                  $Name, $Violations, $baseText, $Target, $status
+              Write-Host $line -ForegroundColor $color
+              if ($Note -ne '') { Write-Host ("       {0}" -f $Note) -ForegroundColor DarkGray }
+              if ($detailsArr.Count -gt 0) {
+                  $max = 15
+                  $i = 0
+                  foreach ($d in $detailsArr) {
+                      if ($i -ge $max) {
+                          Write-Host ("       ... 还有 {0} 条，见 -Details" -f ($detailsArr.Count - $max)) -ForegroundColor DarkGray
+                          break
+                      }
+                      Write-Host ("       - {0}" -f $d) -ForegroundColor DarkGray
+                      $i++
+                  }
+              }
+          }
+          function Write-GuardSummary {
+              param(
+                  [Parameter(Mandatory = $true)]$Results,
+                  [switch]$UpdateBaseline
+              )
+              $results = $Results
+              $regressed = @($results | Where-Object { $_.status -eq 'REGRESS' })
+              $improved  = @($results | Where-Object { $_.status -eq 'IMPROVED' })
+              $total     = ($results | Measure-Object -Property violations -Sum).Sum
+              $baseTotal = ($results | Where-Object { $_.baseline -ne $null } | Measure-Object -Property baseline -Sum).Sum
+              Write-Host ''
+              Write-Host ("RESULT violations_total={0} baseline_total={1}" -f $total, $baseTotal)
+              if ($improved.Count -gt 0) {
+                  Write-Host ("RATCHET_DOWN_REQUIRED  {0} 项低于基线，请用 -UpdateBaseline 下调基线并提交" -f $improved.Count) -ForegroundColor Cyan
+              }
+              if ($regressed.Count -gt 0) {
+                  Write-Host ("RATCHET_REGRESS  {0} 项高于基线: {1}" -f $regressed.Count, (($regressed | ForEach-Object { $_.name }) -join ', ')) -ForegroundColor Red
+                  exit 1
+              }
+              Write-Host 'RATCHET_OK' -ForegroundColor Green
+              exit 0
+          }
+          function Update-BaselineFile {
+              param(
+                  [Parameter(Mandatory = $true)]$Results,
+                  [string]$Commit = ''
+              )
+              $entries = New-Object System.Collections.ArrayList
+              foreach ($r in ($Results | Sort-Object name)) {
+                  $t = 0
+                  if ($r.target -gt 0) { $t = $r.target }
+                  $note = ''
+                  if ($r.note) { $note = ($r.note -replace '"', "'") }
+                  [void]$entries.Add(('    "{0}": {{ "value": {1}, "target": {2}, "note": "{3}" }}' -f `
+                      $r.name, $r.violations, $t, $note))
+              }
+              $json = @()
+              $json += '{'
+              $json += ('  "generatedAt": "{0}",' -f (Get-Date -Format 'yyyy-MM-dd'))
+              $json += ('  "commit": "{0}",' -f $Commit)
+              $json += '  "scope": "forge+neoforge",'
+              $json += '  "guards": {'
+              $json += ($entries -join ",`r`n")
+              $json += '  }'
+              $json += '}'
+              $out = $json -join "`r`n"
+              [System.IO.File]::WriteAllText((Get-BaselinePath), $out, (New-Object System.Text.UTF8Encoding($false)))
+              Write-Host ("BASELINE_WRITTEN  {0}" -f (Get-BaselinePath)) -ForegroundColor Cyan
+          }
+          
+          $files = Get-SourceFiles -Include @('*.java')
+          $allowlist = Get-Allowlist -Name 'atomic-writes'
+          $writeRx  = [regex]'(new\s+FileWriter\s*\(|Files\.write\s*\(|Files\.newBufferedWriter\s*\(|FileOutputStream\s*\()'
+          $atomicRx = [regex]'(AtomicJson|ATOMIC_MOVE|createTempFile|\.tmp\b)'
+          $statePathRx = [regex]'(?i)(store|state|config|persist|profile|room)'
+          $violations = 0
+          $details = New-Object System.Collections.ArrayList
+          $allowedCount = 0
+          $safeFiles = 0
+          foreach ($f in $files) {
+              $rel = Get-RelPath -FullPath $f.FullName
+              $code = Get-CodeOnlyText -Text (Read-Utf8Text -Path $f.FullName)
+              if ($code -eq '') { continue }
+              if (-not $writeRx.IsMatch($code)) { continue }
+              if (-not $statePathRx.IsMatch($rel)) { continue }        # 日志/临时文件不在范围内
+              if ($atomicRx.IsMatch($code)) { $safeFiles++; continue }
+              if (Test-Allowlisted -Allowlist $allowlist -RelPath $rel -Line 0) {
+                  $allowedCount++
+                  continue
+              }
+              $violations++
+              [void]$details.Add(("{0} 直接写文件但未见原子写痕迹" -f $rel))
+          }
+          $note = ("{0} 个文件已有原子写；{1} 个在 allowlist" -f $safeFiles, $allowedCount)
+          Write-GuardResult -Results $Results -Name 'atomic-writes' -Violations $violations -Target 0 -Note $note -Details $details.ToArray()
+          
+          $files = Get-SourceFiles -Include @('*.java')
+          $allowlist = Get-Allowlist -Name 'comment-standard'
+          $htmlRx  = [regex]'</?(p|b|i|u|em|strong|ul|ol|li|br|code|pre|table|tr|td|th|h[1-6]|blockquote|dl|dt|dd)\s*/?>'
+          $authorRx = [regex]'@author\b'
+          $versionRx = [regex]'@version\b'
+          $todoRx = [regex]'\b(TODO|FIXME)\b'
+          $todoDeclRx = [regex]'\b(TODO|FIXME)\s*\('
+          $todoOkRx = [regex]'\b(TODO|FIXME)\s*\(\s*(P[0-9]|[A-Za-z][\w.\-]*)\s*,\s*[^)]+\)'
+          $headerRx = [regex]'^\s*/\*[\s\S]{0,1500}?本文件属于'
+          $violations = 0
+          $details = New-Object System.Collections.ArrayList
+          $allowedCount = 0
+          $byKind = @{ author = 0; version = 0; html = 0; header = 0 }
+          $todoWarnings = New-Object System.Collections.ArrayList
+          foreach ($f in $files) {
+              $rel = Get-RelPath -FullPath $f.FullName
+              $raw = Read-Utf8Text -Path $f.FullName
+              if ($raw -eq '') { continue }
+              $lines = Get-Lines -Text $raw
+              if (-not $headerRx.IsMatch($raw)) {
+                  if (Test-Allowlisted -Allowlist $allowlist -RelPath $rel -Line 0) { $allowedCount++ }
+                  else {
+                      $violations++; $byKind.header++
+                      if ($details.Count -lt 15) { [void]$details.Add(("{0} [缺少文件头] package 前需加含「本文件属于」的块注释" -f $rel)) }
+                  }
+              }
+              $inBlockComment = $false
+              for ($i = 0; $i -lt $lines.Count; $i++) {
+                  $lineNo = $i + 1
+                  $line = $lines[$i]
+                  $commentText = ''
+                  if ($inBlockComment) {
+                      $end = $line.IndexOf('*/')
+                      if ($end -ge 0) {
+                          $commentText = $line.Substring(0, $end)
+                          $inBlockComment = $false
+                      } else {
+                          $commentText = $line
+                      }
+                  } else {
+                      $start = $line.IndexOf('/*')
+                      if ($start -ge 0) {
+                          $end = $line.IndexOf('*/', $start)
+                          if ($end -ge 0) {
+                              $commentText = $line.Substring($start, $end - $start)
+                          } else {
+                              $commentText = $line.Substring($start)
+                              $inBlockComment = $true
+                          }
+                      } else {
+                          $idx = $line.IndexOf('//')
+                          if ($idx -ge 0) { $commentText = $line.Substring($idx); }
+                      }
+                  }
+                  if ($commentText -eq '') { continue }
+                  if ($authorRx.IsMatch($commentText)) {
+                      if (Test-Allowlisted -Allowlist $allowlist -RelPath $rel -Line $lineNo) { $allowedCount++ }
+                      else {
+                          $violations++; $byKind.author++
+                          if ($details.Count -lt 15) { [void]$details.Add(("{0}:{1} [@author] {2}" -f $rel, $lineNo, $commentText.Trim())) }
+                      }
+                  }
+                  if ($versionRx.IsMatch($commentText)) {
+                      if (Test-Allowlisted -Allowlist $allowlist -RelPath $rel -Line $lineNo) { $allowedCount++ }
+                      else {
+                          $violations++; $byKind.version++
+                          if ($details.Count -lt 15) { [void]$details.Add(("{0}:{1} [@version] {2}" -f $rel, $lineNo, $commentText.Trim())) }
+                      }
+                  }
+                  if ($htmlRx.IsMatch($commentText)) {
+                      if (Test-Allowlisted -Allowlist $allowlist -RelPath $rel -Line $lineNo) { $allowedCount++ }
+                      else {
+                          $violations++; $byKind.html++
+                          $m = $htmlRx.Match($commentText)
+                          if ($details.Count -lt 15) { [void]$details.Add(("{0}:{1} [HTML {2}] {3}" -f $rel, $lineNo, $m.Value, $commentText.Trim())) }
+                      }
+                  }
+                  if ($todoDeclRx.IsMatch($commentText) -and -not $todoOkRx.IsMatch($commentText)) {
+                      if ($todoWarnings.Count -lt 10) {
+                          [void]$todoWarnings.Add(("{0}:{1} {2}" -f $rel, $lineNo, $commentText.Trim()))
+                      }
+                  }
+              }
+          }
+          $note = ("缺文件头 {0} / @author {1} / @version {2} / HTML {3}" -f $byKind.header, $byKind.author, $byKind.version, $byKind.html)
+          if ($todoWarnings.Count -gt 0) { $note = ("{0}；{1} 处无责任人待办（提示）" -f $note, $todoWarnings.Count) }
+          if ($allowedCount -gt 0) { $note = ("{0}；{1} 处在白名单" -f $note, $allowedCount) }
+          if ($todoWarnings.Count -gt 0 -and $details.Count -lt 15) {
+              foreach ($w in ($todoWarnings | Select-Object -First 5)) { [void]$details.Add(("TODO-NO-OWNER {0}" -f $w)) }
+          }
+          Write-GuardResult -Results $Results -Name 'comment-standard' -Violations $violations -Target 0 -Note $note -Details $details.ToArray()
+          
+          $root = Get-RepoRoot
+          $files = @(Get-ChildItem -Path $root -Recurse -File -Include '*.gradle' -ErrorAction SilentlyContinue | Where-Object {
+              $_.FullName -notmatch '\\build\\|\\\.gradle\\|\\\.git\\'
+          })
+          $allowlist = Get-Allowlist -Name 'dependency-single-source'
+          $hasVersionCatalog = Test-Path (Join-Path $root 'gradle\libs.versions.toml')
+          $coordRx = [regex]"[A-Za-z0-9_.\-]+:[A-Za-z0-9_.\-]+:[0-9]+\.[0-9]+[0-9A-Za-z_.\-]*"
+          $violations = 0
+          $details = New-Object System.Collections.ArrayList
+          $allowedCount = 0
+          foreach ($f in $files) {
+              $rel = Get-RelPath -FullPath $f.FullName
+              $lines = Get-Lines -Text (Read-Utf8Text -Path $f.FullName)
+              for ($i = 0; $i -lt $lines.Count; $i++) {
+                  $lineNo = $i + 1
+                  $line = $lines[$i]
+                  if ($line -match '^\s*//') { continue }          # 跳过注释行
+                  if ($line -match 'mappings\s+(channel|loom|official)') { continue }
+                  if ($line -match '\$\{') { continue }            # 已参数化的不算硬编码
+                  foreach ($m in $coordRx.Matches($line)) {
+                      if (Test-Allowlisted -Allowlist $allowlist -RelPath $rel -Line $lineNo) {
+                          $allowedCount++
+                          continue
+                      }
+                      $violations++
+                      if ($details.Count -lt 15) { [void]$details.Add(("{0}:{1}  {2}" -f $rel, $lineNo, $m.Value)) }
+                      break   # 一行只计一次
+                  }
+              }
+          }
+          $note = ''
+          if ($hasVersionCatalog) { $note = 'libs.versions.toml 已存在' } else { $note = 'libs.versions.toml 尚未创建（P1-d 落地后基线应降为 0）' }
+          if ($allowedCount -gt 0) { $note = ("{0}；{1} 处在白名单" -f $note, $allowedCount) }
+          Write-GuardResult -Results $Results -Name 'dependency-single-source' -Violations $violations -Target 0 -Note $note -Details $details.ToArray()
+          
+          $loaderModules = @('fabric', 'forge', 'neoforge')
+          $files = Get-SourceFiles -Include @('*.java') | Where-Object {
+              $rel = Get-RelPath -FullPath $_.FullName
+              foreach ($m in $loaderModules) {
+                  if ($rel.StartsWith("$m/")) { return $true }
+              }
+              return $false
+          }
+          $allowlist = Get-Allowlist -Name 'duplicate-classes'
+          $groups = @{}
+          foreach ($f in $files) {
+              $key = $f.BaseName
+              if (-not $groups.ContainsKey($key)) { $groups[$key] = New-Object System.Collections.ArrayList }
+              [void]$groups[$key].Add($f)
+          }
+          $violations = 0
+          $details = New-Object System.Collections.ArrayList
+          $allowedCount = 0
+          foreach ($key in ($groups.Keys | Sort-Object)) {
+              $group = $groups[$key]
+              if ($group.Count -le 1) { continue }
+              $allAllowed = $true
+              foreach ($f in $group) {
+                  $rel = Get-RelPath -FullPath $f.FullName
+                  if (-not (Test-Allowlisted -Allowlist $allowlist -RelPath $rel -Line 0)) { $allAllowed = $false; break }
+              }
+              if ($allAllowed) {
+                  $allowedCount++
+                  continue
+              }
+              $violations++
+              $relPaths = ($group | ForEach-Object { Get-RelPath -FullPath $_.FullName }) -join ', '
+              [void]$details.Add(("{0} ×{1}: {2}" -f $key, $group.Count, $relPaths))
+          }
+          $note = ''
+          if ($allowedCount -gt 0) { $note = ("{0} 组在白名单（入口点/适配实现）" -f $allowedCount) }
+          Write-GuardResult -Results $Results -Name 'duplicate-classes' -Violations $violations -Target 0 -Note $note -Details $details.ToArray()
+          
+          $files = Get-SourceFiles -Include @('*.java')
+          $allowlist = Get-Allowlist -Name 'empty-catch'
+          $catchRx = [regex]'catch\s*\([^)]*\)\s*\{'
+          $printRx = [regex]'\.printStackTrace\s*\('
+          $reasonRx = [regex]'ignore-reason\s*:'
+          function Get-CatchBlockRange {
+              param([string[]]$Lines, [int]$StartIndex)
+              $code = (($Lines[$StartIndex..($Lines.Count - 1)]) -join "`n")
+              $open = $code.IndexOf('{')
+              if ($open -lt 0) { return $null }
+              $chars = $code.ToCharArray()
+              $depth = 0
+              $inString = $false
+              $end = -1
+              for ($k = $open; $k -lt $chars.Count; $k++) {
+                  $c = $chars[$k]
+                  if ($inString) {
+                      if ($c -eq '\') { $k++ }
+                      elseif ($c -eq '"') { $inString = $false }
+                      continue
+                  }
+                  if ($c -eq '"') { $inString = $true; continue }
+                  if ($c -eq '/' -and $k + 1 -lt $chars.Count -and $chars[$k + 1] -eq '/') {
+                      $nl = $code.IndexOf("`n", $k)
+                      if ($nl -lt 0) { break }
+                      $k = $nl
+                      continue
+                  }
+                  if ($c -eq '/' -and $k + 1 -lt $chars.Count -and $chars[$k + 1] -eq '*') {
+                      $close = $code.IndexOf('*/', $k + 2)
+                      if ($close -lt 0) { break }
+                      $k = $close + 1
+                      continue
+                  }
+                  if ($c -eq '{') { $depth++ }
+                  elseif ($c -eq '}') {
+                      $depth--
+                      if ($depth -eq 0) { $end = $k; break }
+                  }
+              }
+              if ($end -lt 0) { return $null }
+              $body = New-Object System.Collections.ArrayList
+              $pos = $open + 1
+              while ($pos -lt $end) {
+                  $nl = $code.IndexOf("`n", $pos)
+                  if ($nl -lt 0 -or $nl -gt $end) { $nl = $end }
+                  [void]$body.Add($StartIndex + ($code.Substring(0, $pos).Split("`n").Count - 1))
+                  $pos = $nl + 1
+              }
+              $lastLine = $StartIndex + ($code.Substring(0, $end).Split("`n").Count - 1)
+              return @{ Next = ($lastLine + 1); Body = $body.ToArray() }
+          }
+          $violations = 0
+          $details = New-Object System.Collections.ArrayList
+          $allowedCount = 0
+          $byKind = @{ empty = 0; ignoredName = 0; printStackTrace = 0 }
+          foreach ($f in $files) {
+              $rel = Get-RelPath -FullPath $f.FullName
+              $raw = Read-Utf8Text -Path $f.FullName
+              if ($raw -eq '') { continue }
+              $lines = Get-Lines -Text $raw          # 用原始文本：需要看注释里的 ignore-reason
+              $codeLines = Get-Lines -Text (Get-CodeOnlyText -Text $raw)
+              for ($i = 0; $i -lt $lines.Count; $i++) {
+                  $lineNo = $i + 1
+                  $line = $lines[$i]
+                  if ($printRx.IsMatch($line) -and $lineNo -le $codeLines.Count) {
+                      if (-not (Test-Allowlisted -Allowlist $allowlist -RelPath $rel -Line $lineNo)) {
+                          $violations++; $byKind.printStackTrace++
+                          if ($details.Count -lt 15) { [void]$details.Add(("{0}:{1} [printStackTrace] {2}" -f $rel, $lineNo, $line.Trim())) }
+                      } else { $allowedCount++ }
+                      continue
+                  }
+                  if (-not $catchRx.IsMatch($line)) { continue }
+                  $range = Get-CatchBlockRange -Lines $lines -StartIndex $i
+                  if ($null -eq $range) { continue }
+                  $j = $range.Next - 1
+                  $bodyLines = @($range.Body | Where-Object { $_ -gt $i } | ForEach-Object { $lines[$_] })
+                  $sawIgnoreReason = $false
+                  foreach ($cur in $bodyLines) {
+                      if ($reasonRx.IsMatch($cur)) { $sawIgnoreReason = $true; break }
+                  }
+                  if ($sawIgnoreReason) {
+                      $allowedCount++
+                      $i = $j
+                      continue
+                  }
+                  $bodyCode = Get-CodeOnlyText -Text (($bodyLines -join "`r`n"))
+                  $meaningful = @($bodyCode -split "`r?`n" | Where-Object { $_.Trim() -ne '' -and $_.Trim() -ne '}' })
+                  $isEmpty = ($meaningful.Count -eq 0)
+                  $isIgnoredName = ($line -match '\b(ignored|ignore|unused|_)\b') -and $isEmpty
+                  if ($isEmpty) {
+                      if (-not (Test-Allowlisted -Allowlist $allowlist -RelPath $rel -Line $lineNo)) {
+                          $violations++
+                          if ($isIgnoredName) { $byKind.ignoredName++ } else { $byKind.empty++ }
+                          if ($details.Count -lt 15) { [void]$details.Add(("{0}:{1} [空 catch] {2}" -f $rel, $lineNo, $line.Trim())) }
+                      } else { $allowedCount++ }
+                  }
+                  $i = $j
+              }
+          }
+          $note = ("空块 {0} / ignored 命名 {1} / printStackTrace {2}" -f $byKind.empty, $byKind.ignoredName, $byKind.printStackTrace)
+          if ($allowedCount -gt 0) { $note = ("{0}；{1} 处有 ignore-reason 或在白名单" -f $note, $allowedCount) }
+          Write-GuardResult -Results $Results -Name 'empty-catch' -Violations $violations -Target 0 -Note $note -Details $details.ToArray()
+          
+          $uiPathPattern = '(?i)/(client/)?(gui|ui)/'
+          $files = Get-SourceFiles -Include @('*.java') | Where-Object {
+              (Get-RelPath -FullPath $_.FullName) -match $uiPathPattern
+          }
+          $allowlist = Get-Allowlist -Name 'error-leak'
+          $patterns = @(
+              @{ name = 'getMessage';          rx = '\.getMessage\s*\(\s*\)' },
+              @{ name = 'getLocalizedMessage'; rx = '\.getLocalizedMessage\s*\(\s*\)' },
+              @{ name = 'printStackTrace';     rx = '\.printStackTrace\s*\(' }
+          )
+          $violations = 0
+          $details = New-Object System.Collections.ArrayList
+          $allowedCount = 0
+          foreach ($f in $files) {
+              $rel = Get-RelPath -FullPath $f.FullName
+              $lines = Get-Lines -Text (Get-CodeOnlyText -Text (Read-Utf8Text -Path $f.FullName))
+              for ($i = 0; $i -lt $lines.Count; $i++) {
+                  $lineNo = $i + 1
+                  $line = $lines[$i]
+                  if ($line -eq '') { continue }
+                  foreach ($p in $patterns) {
+                      if (-not [regex]::IsMatch($line, $p.rx)) { continue }
+                      if (Test-Allowlisted -Allowlist $allowlist -RelPath $rel -Line $lineNo) {
+                          $allowedCount++
+                      } else {
+                          $violations++
+                          $snippet = $line.Trim()
+                          if ($snippet.Length -gt 90) { $snippet = $snippet.Substring(0, 90) + '...' }
+                          if ($details.Count -lt 15) { [void]$details.Add(("{0}:{1} [{2}] {3}" -f $rel, $lineNo, $p.name, $snippet)) }
+                      }
+                      break
+                  }
+              }
+          }
+          $note = ("扫描 {0} 个 UI 文件" -f @($files).Count)
+          if ($allowedCount -gt 0) { $note = ("{0}；{1} 处在白名单" -f $note, $allowedCount) }
+          Write-GuardResult -Results $Results -Name 'error-leak' -Violations $violations -Target 0 -Note $note -Details $details.ToArray()
+          
+          $files = Get-SourceFiles -Include @('*.java')
+          $allowlist = Get-Allowlist -Name 'executor-lifecycle'
+          $createRx  = [regex]'Executors\.new'
+          $cleanupRx = [regex]'\b(shutdownNow|shutdown|close)\s*\('
+          $autoRx    = [regex]'implements\s+[^{]*\bAutoCloseable\b|extends\s+[^{]*\bAutoCloseable\b'
+          $violations = 0
+          $details = New-Object System.Collections.ArrayList
+          $allowedCount = 0
+          $owners = 0
+          foreach ($f in $files) {
+              $rel = Get-RelPath -FullPath $f.FullName
+              $code = Get-CodeOnlyText -Text (Read-Utf8Text -Path $f.FullName)
+              if ($code -eq '') { continue }
+              if (-not $createRx.IsMatch($code)) { continue }
+              $hasCleanup = ($cleanupRx.IsMatch($code) -or $autoRx.IsMatch($code))
+              if ($hasCleanup) { $owners++; continue }
+              if (Test-Allowlisted -Allowlist $allowlist -RelPath $rel -Line 0) {
+                  $allowedCount++
+                  continue
+              }
+              $violations++
+              [void]$details.Add(("{0} 创建线程池但无 shutdown/AutoCloseable" -f $rel))
+          }
+          $note = ("{0} 个文件有清理路径；{1} 个在 allowlist" -f $owners, $allowedCount)
+          Write-GuardResult -Results $Results -Name 'executor-lifecycle' -Violations $violations -Target 0 -Note $note -Details $details.ToArray()
+          
+          $hardLimit = 800
+          $files = Get-SourceFiles -Include @('*.java')
+          $allowlist = Get-Allowlist -Name 'file-size'
+          $violations = 0
+          $details = New-Object System.Collections.ArrayList
+          $allowedCount = 0
+          $worst = 0
+          foreach ($f in $files) {
+              $rel = Get-RelPath -FullPath $f.FullName
+              $text = Read-Utf8Text -Path $f.FullName
+              if ($text -eq '') { continue }
+              $lines = (Get-Lines -Text $text).Count
+              if ($lines -gt $worst) { $worst = $lines }
+              if ($lines -le $hardLimit) { continue }
+              if (Test-Allowlisted -Allowlist $allowlist -RelPath $rel -Line 0) {
+                  $allowedCount++
+                  continue
+              }
+              $violations++
+              [void]$details.Add(("{0} ({1} 行，超 {2})" -f $rel, $lines, ($lines - $hardLimit)))
+          }
+          $note = ("最大 {0} 行；{1} 个超标文件在白名单" -f $worst, $allowedCount)
+          Write-GuardResult -Results $Results -Name 'file-size' -Violations $violations -Target 0 -Note $note -Details $details.ToArray()
+          
+          $maxWidth = 120
+          $files = Get-SourceFiles -Include @('*.java', '*.json', '*.gradle', '*.properties', '*.toml') | Where-Object {
+              (Get-RelPath -FullPath $_.FullName) -notmatch '^scripts/'
+          }
+          $allowlist = Get-Allowlist -Name 'format'
+          $violations = 0
+          $details = New-Object System.Collections.ArrayList
+          $allowedCount = 0
+          $byKind = @{ bom = 0; tab = 0; width = 0; trailing = 0; crlf = 0 }
+          foreach ($f in $files) {
+              $rel = Get-RelPath -FullPath $f.FullName
+              $bytes = [System.IO.File]::ReadAllBytes($f.FullName)
+              if ($bytes.Length -eq 0) { continue }
+              if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+                  if (-not (Test-Allowlisted -Allowlist $allowlist -RelPath $rel -Line 0)) {
+                      $violations++; $byKind.bom++
+                      [void]$details.Add(("{0} 含 UTF-8 BOM（应为无 BOM）" -f $rel))
+                  } else { $allowedCount++ }
+              }
+              $text = Read-Utf8Text -Path $f.FullName
+              if ($text -eq '') { continue }
+              $lines = Get-Lines -Text $text
+              for ($i = 0; $i -lt $lines.Count; $i++) {
+                  $lineNo = $i + 1
+                  $line = $lines[$i]
+                  $bad = ''
+                  if ($line.Contains("`t")) { $bad = 'tab' }
+                  elseif ($line.Length -gt $maxWidth) { $bad = 'width' }
+                  elseif ($line -ne $line.TrimEnd()) { $bad = 'trailing' }
+                  if ($bad -eq '') { continue }
+                  if (Test-Allowlisted -Allowlist $allowlist -RelPath $rel -Line $lineNo) {
+                      $allowedCount++
+                      continue
+                  }
+                  $violations++
+                  $byKind[$bad] = $byKind[$bad] + 1
+                  if ($details.Count -lt 15) {
+                      $shown = $line.Trim()
+                      if ($shown.Length -gt 70) { $shown = $shown.Substring(0, 70) + '...' }
+                      [void]$details.Add(("{0}:{1} [{2}] {3}" -f $rel, $lineNo, $bad, $shown))
+                  }
+              }
+          }
+          $note = ("BOM {0} / tab {1} / 超宽 {2} / 尾随空白 {3}" -f $byKind.bom, $byKind.tab, $byKind.width, $byKind.trailing)
+          if ($allowedCount -gt 0) { $note = ("{0}；{1} 处在白名单" -f $note, $allowedCount) }
+          Write-GuardResult -Results $Results -Name 'format' -Violations $violations -Target 0 -Note $note -Details $details.ToArray()
+          
+          $files = Get-SourceFiles -Include @('*.java')
+          $allowlist = Get-Allowlist -Name 'hardcoded-strings'
+          $stringWithCjk = [regex]'"([^"\\]|\\.)*[\u4e00-\u9fff]([^"\\]|\\.)*"'
+          $textBlockCjk  = [regex]'"[\u4e00-\u9fff]'
+          $violations = 0
+          $details = New-Object System.Collections.ArrayList
+          $perFile = @{}
+          foreach ($f in $files) {
+              $rel = Get-RelPath -FullPath $f.FullName
+              if ($rel -match '/src/test/') { continue }
+              $raw = Read-Utf8Text -Path $f.FullName
+              if ($raw -eq '') { continue }
+              $code = Get-CodeOnlyText -Text $raw
+              $lines = Get-Lines -Text $code
+              $count = 0
+              for ($i = 0; $i -lt $lines.Count; $i++) {
+                  $lineNo = $i + 1
+                  $line = $lines[$i]
+                  if ($line -eq '') { continue }
+                  $m = $stringWithCjk.Matches($line)
+                  if ($m.Count -gt 0) {
+                      if (Test-Allowlisted -Allowlist $allowlist -RelPath $rel -Line $lineNo) { continue }
+                      $count += $m.Count
+                      $snippet = $line.Trim()
+                      if ($snippet.Length -gt 90) { $snippet = $snippet.Substring(0, 90) + '...' }
+                      if ($details.Count -lt 40) { [void]$details.Add(("{0}:{1}  {2}" -f $rel, $lineNo, $snippet)) }
+                      continue
+                  }
+                  if ($line -match '"""' -and (Test-CjkInTextBlockStart -Line $line)) {
+                      if (Test-Allowlisted -Allowlist $allowlist -RelPath $rel -Line $lineNo) { continue }
+                      $count++
+                  }
+              }
+              if ($count -gt 0) {
+                  $perFile[$rel] = $count
+                  $violations += $count
+              }
+          }
+          function Test-CjkInTextBlockStart {
+              param([string]$Line)
+              return [regex]::IsMatch($Line, '""".*[\u4e00-\u9fff]')
+          }
+          $top = ($perFile.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 5 |
+                  ForEach-Object { "{0}({1})" -f $_.Key, $_.Value }) -join ', '
+          $note = ''
+          if ($top -ne '') { $note = "最集中: $top" }
+          Write-GuardResult -Results $Results -Name 'hardcoded-strings' -Violations $violations -Target 0 -Note $note -Details $details.ToArray()
+          
+          $root = Get-RepoRoot
+          $langDir = Join-Path $root 'ender_core\src\main\resources\assets\ender_online\lang'
+          $requiredFiles = @('en_us.json', 'zh_cn.json', 'zh_tw.json')
+          $keyPattern = [regex]'"(ender\.[a-zA-Z0-9_.\-]+)"'
+          $referenced = @{}          # key -> @( "file:line" )
+          $files = Get-SourceFiles -Include @('*.java')
+          foreach ($f in $files) {
+              $rel = Get-RelPath -FullPath $f.FullName
+              $lines = Get-Lines -Text (Read-Utf8Text -Path $f.FullName)
+              for ($i = 0; $i -lt $lines.Count; $i++) {
+                  foreach ($m in $keyPattern.Matches($lines[$i])) {
+                      $k = $m.Groups[1].Value
+                      if (-not $referenced.ContainsKey($k)) { $referenced[$k] = New-Object System.Collections.ArrayList }
+                      [void]$referenced[$k].Add(("{0}:{1}" -f $rel, ($i + 1)))
+                  }
+              }
+          }
+          $details = New-Object System.Collections.ArrayList
+          $violations = 0
+          foreach ($langName in $requiredFiles) {
+              $p = Join-Path $langDir $langName
+              if (-not (Test-Path $p)) {
+                  $isMandatory = ($langName -ne 'zh_tw.json')   # zh_tw 允许后补
+                  if ($isMandatory) {
+                      $violations++
+                      [void]$details.Add(("缺失语言文件: {0}" -f $langName))
+                  } else {
+                      [void]$details.Add(("（待补）语言文件尚未创建: {0}" -f $langName))
+                  }
+                  continue
+              }
+              $raw = Read-Utf8Text -Path $p
+              $missing = New-Object System.Collections.ArrayList
+              foreach ($k in ($referenced.Keys | Sort-Object)) {
+                  if ($raw -notmatch [regex]::Escape('"' + $k + '"')) {
+                      [void]$missing.Add($k)
+                  }
+              }
+              if ($missing.Count -gt 0) {
+                  $violations += $missing.Count
+                  foreach ($k in ($missing | Select-Object -First 20)) {
+                      [void]$details.Add(("{0} 缺少键 {1}（被 {2} 引用）" -f $langName, $k, ($referenced[$k][0])))
+                  }
+                  if ($missing.Count -gt 20) {
+                      [void]$details.Add(("... {0} 还缺 {1} 个键" -f $langName, ($missing.Count - 20)))
+                  }
+              }
+          }
+          $note = ("代码引用 {0} 个 ender.* 键" -f $referenced.Count)
+          Write-GuardResult -Results $Results -Name 'lang-keys' -Violations $violations -Target 0 -Note $note -Details $details.ToArray()
+          
+          $uiPathPattern = '(?i)/(client/)?(gui|ui)/'
+          $files = Get-SourceFiles -Include @('*.java') | Where-Object {
+              $rel = Get-RelPath -FullPath $_.FullName
+              return ($rel -match $uiPathPattern)
+          }
+          $allowlist = Get-Allowlist -Name 'layout-constants'
+          $patterns = @(
+              @{ name = 'width/height 加减大常量'; rx = '(?i)\b(width|height)\s*[/+\-]\s*[1-9][0-9]{2,}\b' },
+              @{ name = '面板尺寸赋大常量';        rx = '(?i)\b(panel|card|popup|dialog|sidebar|tabs?|list|btn|button)(W|H|Width|Height)\s*=\s*[1-9][0-9]{2,}\b' },
+              @{ name = '绘制调用中的三位数坐标';  rx = '\b(fill|drawString|blit|render|draw[A-Za-z]*)\s*\([^)]*,?\s*[1-9][0-9]{2,}\s*,' }
+          )
+          $violations = 0
+          $details = New-Object System.Collections.ArrayList
+          $perPattern = @{}
+          foreach ($f in $files) {
+              $rel = Get-RelPath -FullPath $f.FullName
+              $lines = Get-Lines -Text (Get-CodeOnlyText -Text (Read-Utf8Text -Path $f.FullName))
+              for ($i = 0; $i -lt $lines.Count; $i++) {
+                  $lineNo = $i + 1
+                  $line = $lines[$i]
+                  if ($line -eq '') { continue }
+                  foreach ($p in $patterns) {
+                      if ([regex]::IsMatch($line, $p.rx)) {
+                          if (Test-Allowlisted -Allowlist $allowlist -RelPath $rel -Line $lineNo) { continue }
+                          $violations++
+                          if (-not $perPattern.ContainsKey($p.name)) { $perPattern[$p.name] = 0 }
+                          $perPattern[$p.name] = $perPattern[$p.name] + 1
+                          $snippet = $line.Trim()
+                          if ($snippet.Length -gt 85) { $snippet = $snippet.Substring(0, 85) + '...' }
+                          if ($details.Count -lt 15) { [void]$details.Add(("{0}:{1} [{2}] {3}" -f $rel, $lineNo, $p.name, $snippet)) }
+                          break   # 一行只计一次
+                      }
+                  }
+              }
+          }
+          $note = ("扫描 {0} 个 UI 文件" -f @($files).Count)
+          Write-GuardResult -Results $Results -Name 'layout-constants' -Violations $violations -Target 0 -Note $note -Details $details.ToArray()
+          
+          $allowlist = Get-Allowlist -Name 'loader-leak'
+          $rules = @(
+              @{ module = 'ender_core';   rx = '^\s*import\s+(net\.minecraft\.|net\.minecraftforge\.|net\.neoforged\.|cpw\.mods\.|net\.fabricmc\.)'; why = 'ender_core 必须零 Minecraft 依赖（ADR-04）' },
+              @{ module = 'ender_common'; rx = '^\s*import\s+(net\.minecraftforge\.|net\.neoforged\.|cpw\.mods\.|net\.fabricmc\.)';        why = 'ender_common 必须只写 vanilla Mojmap（ADR-13）' }
+          )
+          $violations = 0
+          $details = New-Object System.Collections.ArrayList
+          $allowedCount = 0
+          $scanned = 0
+          foreach ($rule in $rules) {
+              $files = Get-SourceFilesInModules -Modules @($rule.module)
+              foreach ($f in $files) {
+                  $rel = Get-RelPath -FullPath $f.FullName
+                  $scanned++
+                  $lines = Get-Lines -Text (Read-Utf8Text -Path $f.FullName)
+                  for ($i = 0; $i -lt $lines.Count; $i++) {
+                      $lineNo = $i + 1
+                      if (-not [regex]::IsMatch($lines[$i], $rule.rx)) { continue }
+                      if (Test-Allowlisted -Allowlist $allowlist -RelPath $rel -Line $lineNo) {
+                          $allowedCount++
+                          continue
+                      }
+                      $violations++
+                      [void]$details.Add(("{0}:{1} {2} :: {3}" -f $rel, $lineNo, $rule.why, $lines[$i].Trim()))
+                  }
+              }
+          }
+          $note = ("扫描 {0} 个文件（ender_core + ender_common）" -f $scanned)
+          if ($scanned -le 1 -and -not (Test-Path (Join-Path (Get-RepoRoot) 'ender_common'))) {
+              $note = "ender_common 尚未创建（P1 阶段建立）；当前只校验 ender_core"
+          }
+          if ($allowedCount -gt 0) { $note = ("{0}；{1} 处在白名单" -f $note, $allowedCount) }
+          Write-GuardResult -Results $Results -Name 'loader-leak' -Violations $violations -Target 0 -Note $note -Details $details.ToArray()
+          
+          $files = Get-SourceFiles -Include @('*.java')
+          $allowlist = Get-Allowlist -Name 'no-raw-threads'
+          $rx = [regex]'new\s+Thread\s*\('
+          $violations = 0
+          $details = New-Object System.Collections.ArrayList
+          $allowedCount = 0
+          $perFile = @{}
+          foreach ($f in $files) {
+              $rel = Get-RelPath -FullPath $f.FullName
+              $lines = Get-Lines -Text (Get-CodeOnlyText -Text (Read-Utf8Text -Path $f.FullName))
+              for ($i = 0; $i -lt $lines.Count; $i++) {
+                  $lineNo = $i + 1
+                  if (-not $rx.IsMatch($lines[$i])) { continue }
+                  if (Test-Allowlisted -Allowlist $allowlist -RelPath $rel -Line $lineNo) {
+                      $allowedCount++
+                      continue
+                  }
+                  $violations++
+                  if (-not $perFile.ContainsKey($rel)) { $perFile[$rel] = 0 }
+                  $perFile[$rel] = $perFile[$rel] + 1
+                  $snippet = $lines[$i].Trim()
+                  if ($snippet.Length -gt 90) { $snippet = $snippet.Substring(0, 90) + '...' }
+                  if ($details.Count -lt 15) { [void]$details.Add(("{0}:{1}  {2}" -f $rel, $lineNo, $snippet)) }
+              }
+          }
+          $top = ($perFile.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 3 |
+                  ForEach-Object { "{0}({1})" -f (Split-Path $_.Key -Leaf), $_.Value }) -join ', '
+          $note = ''
+          if ($top -ne '') { $note = "最集中: $top" }
+          if ($allowedCount -gt 0) { $note = ("{0}；{1} 处在白名单" -f $note, $allowedCount) }
+          Write-GuardResult -Results $Results -Name 'raw-threads' -Violations $violations -Target 6 -Note $note -Details $details.ToArray()
+          
+          $files = Get-SourceFiles -Include @('*.java')
+          $allowlist = Get-Allowlist -Name 'reflective-lookup'
+          $patterns = @(
+              @{ name = 'getMethod';        rx = '\.getMethod\s*\(' },
+              @{ name = 'getDeclaredMethod'; rx = '\.getDeclaredMethod\s*\(' },
+              @{ name = 'getField';         rx = '\.getField\s*\(' },
+              @{ name = 'Class.forName';    rx = 'Class\.forName\s*\(' },
+              @{ name = 'getDeclaredField'; rx = '\.getDeclaredField\s*\(' }
+          )
+          $violations = 0
+          $details = New-Object System.Collections.ArrayList
+          $allowedCount = 0
+          $perFile = @{}
+          $perKind = @{}
+          foreach ($f in $files) {
+              $rel = Get-RelPath -FullPath $f.FullName
+              $lines = Get-Lines -Text (Get-CodeOnlyText -Text (Read-Utf8Text -Path $f.FullName))
+              for ($i = 0; $i -lt $lines.Count; $i++) {
+                  $lineNo = $i + 1
+                  $line = $lines[$i]
+                  if ($line -eq '') { continue }
+                  foreach ($p in $patterns) {
+                      if (-not [regex]::IsMatch($line, $p.rx)) { continue }
+                      if (Test-Allowlisted -Allowlist $allowlist -RelPath $rel -Line $lineNo) {
+                          $allowedCount++
+                      } else {
+                          $violations++
+                          if (-not $perFile.ContainsKey($rel)) { $perFile[$rel] = 0 }
+                          $perFile[$rel] = $perFile[$rel] + 1
+                          if (-not $perKind.ContainsKey($p.name)) { $perKind[$p.name] = 0 }
+                          $perKind[$p.name] = $perKind[$p.name] + 1
+                          $snippet = $line.Trim()
+                          if ($snippet.Length -gt 90) { $snippet = $snippet.Substring(0, 90) + '...' }
+                          if ($details.Count -lt 15) { [void]$details.Add(("{0}:{1} [{2}] {3}" -f $rel, $lineNo, $p.name, $snippet)) }
+                      }
+                      break
+                  }
+              }
+          }
+          $top = ($perFile.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 5 |
+                  ForEach-Object { "{0}({1})" -f (Split-Path $_.Key -Leaf), $_.Value }) -join ', '
+          $note = ''
+          if ($top -ne '') { $note = "最集中: $top" }
+          if ($allowedCount -gt 0) { $note = ("{0}；{1} 处在白名单" -f $note, $allowedCount) }
+          Write-GuardResult -Results $Results -Name 'reflective-lookup' -Violations $violations -Target 0 -Note $note -Details $details.ToArray()
+          
+          $files = Get-SourceFiles -Include @('*.java')
+          $allowlist = Get-Allowlist -Name 'static-state'
+          $fieldRx = [regex]'^\s*private\s+static\s+(?!final\b)(?![A-Za-z_<>\[\],\s\.]+\s+\w+\s*\()[^;=]*[;=]'
+          $violations = 0
+          $details = New-Object System.Collections.ArrayList
+          $allowedCount = 0
+          $perFile = @{}
+          foreach ($f in $files) {
+              $rel = Get-RelPath -FullPath $f.FullName
+              $lines = Get-Lines -Text (Get-CodeOnlyText -Text (Read-Utf8Text -Path $f.FullName))
+              for ($i = 0; $i -lt $lines.Count; $i++) {
+                  $lineNo = $i + 1
+                  $line = $lines[$i]
+                  if ($line -notmatch '\bprivate\s+static\b') { continue }
+                  if (-not $fieldRx.IsMatch($line)) { continue }
+                  if ($line -match '\b(Logger|LOGGER|Log)\b') { continue }
+                  if (Test-Allowlisted -Allowlist $allowlist -RelPath $rel -Line $lineNo) {
+                      $allowedCount++
+                      continue
+                  }
+                  $violations++
+                  if (-not $perFile.ContainsKey($rel)) { $perFile[$rel] = 0 }
+                  $perFile[$rel] = $perFile[$rel] + 1
+                  $snippet = $line.Trim()
+                  if ($snippet.Length -gt 90) { $snippet = $snippet.Substring(0, 90) + '...' }
+                  if ($details.Count -lt 15) { [void]$details.Add(("{0}:{1}  {2}" -f $rel, $lineNo, $snippet)) }
+              }
+          }
+          $top = ($perFile.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 5 |
+                  ForEach-Object { "{0}({1})" -f (Split-Path $_.Key -Leaf), $_.Value }) -join ', '
+          $note = ''
+          if ($top -ne '') { $note = "最集中: $top" }
+          if ($allowedCount -gt 0) { $note = ("{0}；{1} 处在白名单" -f $note, $allowedCount) }
+          Write-GuardResult -Results $Results -Name 'static-state' -Violations $violations -Target 10 -Note $note -Details $details.ToArray()
+          
+          $total = 0
+          $regressed = New-Object System.Collections.ArrayList
+          $improved = New-Object System.Collections.ArrayList
+          foreach ($r in $Results) {
+              $total += $r.violations
+              if ($r.status -eq 'REGRESS') { [void]$regressed.Add($r.name) }
+              if ($r.status -eq 'IMPROVED') { [void]$improved.Add($r.name) }
+          }
+          Write-Host ''
+          Write-Host ("RESULT violations_total={0} guards={1}" -f $total, $Results.Count)
+          if ($improved.Count -gt 0) {
+              Write-Host ("BELOW_BASELINE {0}" -f ($improved -join ', '))
+          }
+          if ($regressed.Count -gt 0) {
+              Write-Host ("REGRESSED {0}" -f ($regressed -join ', '))
+              exit 1
+          }
+          Write-Host 'RATCHET_OK'
+          exit 0
 
   test:
-    name: ender_core 单元测试
+    name: ender_core unit tests
     needs: guards
     runs-on: windows-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Setup JDK 21
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
 
-      - name: 预取 JUnit 到 Gradle 缓存
+      - name: Write test runner source
         shell: pwsh
         run: |
-          # run-core-tests.ps1 从 Gradle 缓存取 JUnit jar；这里用一个最小临时项目把依赖拉下来，
-          # 避免触发 forge/neoforge 子项目的配置阶段。
-          $tmp = Join-Path $env:RUNNER_TEMP 'junit-seed'
-          New-Item -ItemType Directory -Path $tmp -Force | Out-Null
-          New-Item -ItemType Directory -Path (Join-Path $tmp 'src/test/java') -Force | Out-Null
+          $dst = Join-Path $env:RUNNER_TEMP 'ender-core-runner\tools'
+          New-Item -ItemType Directory -Path $dst -Force | Out-Null
           @'
-          plugins { id 'java' }
-          repositories { mavenCentral() }
-          dependencies {
-              testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
-              testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+          /*
+           * 本文件属于 EnderOnline 开发脚本。
+           *
+           * 职责：不依赖 Gradle 的 JUnit 测试运行器，用于在加载器子项目无法配置时仍能跑单元测试。
+           */
+          
+          package tools;
+          
+          import org.junit.platform.engine.TestExecutionResult;
+          import org.junit.platform.engine.discovery.DiscoverySelectors;
+          import org.junit.platform.launcher.Launcher;
+          import org.junit.platform.launcher.LauncherDiscoveryRequest;
+          import org.junit.platform.launcher.TestExecutionListener;
+          import org.junit.platform.launcher.TestIdentifier;
+          import org.junit.platform.launcher.core.LauncherDiscoveryRequestBuilder;
+          import org.junit.platform.launcher.core.LauncherFactory;
+          import org.junit.platform.launcher.listeners.SummaryGeneratingListener;
+          import org.junit.platform.launcher.listeners.TestExecutionSummary;
+          
+          import java.io.PrintWriter;
+          import java.nio.file.Files;
+          import java.nio.file.Path;
+          import java.nio.file.Paths;
+          import java.util.ArrayList;
+          import java.util.List;
+          
+          /**
+           * 无 Gradle 的 JUnit 5 测试运行器。
+           *
+           * 存在原因：本仓库的 forge/neoforge 子项目使用 ForgeGradle/NeoGradle，
+           * 它们在配置阶段就要解析 Minecraft 依赖，在部分网络或平台上会失败，
+           * 从而导致整个构建（包括与 Minecraft 完全无关的 ender_core 单元测试）无法启动。
+           *
+           * 本运行器直接用 JUnit Platform Launcher API 扫描编译产物中的测试类，
+           * 因此只需要 JDK 与 JUnit 的 jar，不需要 Gradle、不需要网络、不需要游戏环境。
+           *
+           * 用法：{@code java -cp <classes>:<test-classes>:<junit-jars> tools.CoreTestRunner [输出目录]}
+           * 通常由 {@code the CI test step} 调用。
+           *
+           * @since 1.0
+           */
+          public final class CoreTestRunner {
+          
+              private CoreTestRunner() {
+              }
+          
+              /** 单个用例的失败明细，用于在汇总后集中打印。 */
+              private static final class Failure {
+                  final String id;
+                  final Throwable error;
+          
+                  Failure(String id, Throwable error) {
+                      this.id = id;
+                      this.error = error;
+                  }
+              }
+          
+              public static void main(String[] args) throws Exception {
+                  Path outputRoot;
+                  if (args.length > 0 && !args[0].isEmpty()) {
+                      outputRoot = Paths.get(args[0]);
+                  } else {
+                      outputRoot = Paths.get("build", "core-test-results");
+                  }
+                  // 可选过滤：类名或方法名子串（空串 = 全部）
+                  String filter = args.length > 1 ? args[1] : "";
+                  Files.createDirectories(outputRoot);
+          
+                  // 以 @DisplayName 为主的执行监听器，让输出直接可读
+                  List<Failure> failures = new ArrayList<>();
+                  int[] counters = new int[3]; // [started, succeeded, failed]
+          
+                  TestExecutionListener progress = new TestExecutionListener() {
+                      @Override
+                      public void executionStarted(TestIdentifier id) {
+                          if (!id.isTest()) {
+                              return;
+                          }
+                          counters[0]++;
+                          System.out.println("RUN   " + displayName(id));
+                      }
+          
+                      @Override
+                      public void executionFinished(TestIdentifier id, TestExecutionResult result) {
+                          if (!id.isTest()) {
+                              return;
+                          }
+                          if (result.getStatus() == TestExecutionResult.Status.SUCCESSFUL) {
+                              counters[1]++;
+                              System.out.println("  OK  " + displayName(id));
+                              return;
+                          }
+                          counters[2]++;
+                          Throwable error = result.getThrowable().orElse(null);
+                          failures.add(new Failure(displayName(id), error));
+                          System.out.println("FAIL  " + displayName(id));
+                          if (error != null) {
+                              System.out.println("      " + error.getClass().getSimpleName() + ": " + error.getMessage());
+                          }
+                      }
+                  };
+          
+                  SummaryGeneratingListener summaryListener = new SummaryGeneratingListener();
+          
+                  LauncherDiscoveryRequest request;
+                  if (!filter.isEmpty()) {
+                      // 过滤时按类名子串匹配，便于本地只跑一组测试
+                      request = LauncherDiscoveryRequestBuilder.request()
+                              .selectors(DiscoverySelectors.selectClasspathRoots(java.util.Set.of(
+                                      Paths.get("build", "core-test-classes").toAbsolutePath())))
+                              .filters(org.junit.platform.engine.discovery.ClassNameFilter.includeClassNamePatterns(
+                                      ".*" + java.util.regex.Pattern.quote(filter) + ".*"))
+                              .build();
+                  } else {
+                      request = LauncherDiscoveryRequestBuilder.request()
+                              .selectors(DiscoverySelectors.selectClasspathRoots(java.util.Set.of(
+                                      Paths.get("build", "core-test-classes").toAbsolutePath())))
+                              .build();
+                  }
+          
+                  Launcher launcher = LauncherFactory.create();
+                  launcher.registerTestExecutionListeners(progress, summaryListener);
+                  launcher.execute(request);
+          
+                  TestExecutionSummary summary = summaryListener.getSummary();
+          
+                  // 汇总后集中打印失败堆栈，便于排查
+                  if (!failures.isEmpty()) {
+                      System.out.println();
+                      System.out.println("================ 失败明细 ================");
+                      for (Failure f : failures) {
+                          System.out.println();
+                          System.out.println("[FAIL] " + f.id);
+                          if (f.error != null) {
+                              PrintWriter pw = new PrintWriter(System.out, true);
+                              f.error.printStackTrace(pw);
+                          }
+                      }
+                  }
+          
+                  System.out.println();
+                  System.out.println("================ 汇总 ================");
+                  System.out.printf("容器 %d | 用例 %d | 通过 %d | 失败 %d | 跳过 %d%n",
+                          summary.getContainersFoundCount(),
+                          summary.getTestsFoundCount(),
+                          summary.getTestsSucceededCount(),
+                          summary.getTestsFailedCount(),
+                          summary.getTestsSkippedCount());
+                  System.out.printf("耗时 %d ms%n", summary.getTimeFinished() - summary.getTimeStarted());
+          
+                  long failed = summary.getTestsFailedCount();
+                  if (failed > 0) {
+                      System.out.println("RESULT=FAIL");
+                      System.exit(1);
+                  }
+                  if (summary.getTestsFoundCount() == 0) {
+                      System.out.println("RESULT=NO_TESTS_FOUND");
+                      System.exit(2);
+                  }
+                  System.out.println("RESULT=PASS");
+                  System.exit(0);
+              }
+          
+              /** 取 @DisplayName，缺失时回退到类的简名。 */
+              private static String displayName(TestIdentifier id) {
+                  return id.getDisplayName();
+              }
           }
-          '@ | Set-Content -Encoding UTF8 (Join-Path $tmp 'build.gradle')
-          'rootProject.name = "junit-seed"' | Set-Content -Encoding UTF8 (Join-Path $tmp 'settings.gradle')
-          Push-Location $tmp
-          try {
-            gradle --no-daemon --quiet dependencies --configuration testRuntimeClasspath
-          } finally {
-            Pop-Location
-          }
+          
+          '@ | Set-Content -Encoding UTF8 (Join-Path $dst 'CoreTestRunner.java')
 
-      - name: 运行 ender_core 测试
+      - name: Run tests
         shell: pwsh
-        run: ./scripts/run-core-tests.ps1
+        run: |
+          param(
+              [string]$Filter = '',
+              [switch]$SkipCompile,
+              [string]$JavaHome = $env:JAVA_HOME,
+              [string]$OnlySources = '',
+              [string]$OnlyFiles = ''
+          )
+          $ErrorActionPreference = 'Stop'
+          if (-not $root) { $root = $env:GITHUB_WORKSPACE }
+          if (-not $root) { $root = (Get-Location).Path }
+          Set-Location $root
+          Set-Location $root
+          function Fail([string]$message, [int]$code) {
+              Write-Host "ERROR: $message" -ForegroundColor Red
+              exit $code
+          }
+          if (-not $JavaHome -or -not (Test-Path (Join-Path $JavaHome 'bin\javac.exe'))) {
+              $candidates = @()
+              if ($env:JAVA_HOME) { $candidates += $env:JAVA_HOME }
+              $candidates += (Get-ChildItem 'C:\Program Files\Java', 'D:\Java', 'C:\Program Files\Eclipse Adoptium' -Directory -ErrorAction SilentlyContinue |
+                              Where-Object { $_.Name -match 'jdk|jre' } | ForEach-Object { $_.FullName })
+              $found = $candidates | Where-Object { Test-Path (Join-Path $_ 'bin\javac.exe') } | Select-Object -First 1
+              if (-not $found) { Fail "未找到 JDK（需要 javac）。请设置 JAVA_HOME 或传入 -JavaHome。" 3 }
+              $JavaHome = $found
+          }
+          $javac = Join-Path $JavaHome 'bin\javac.exe'
+          $java  = Join-Path $JavaHome 'bin\java.exe'
+          Write-Host "JDK: $JavaHome" -ForegroundColor DarkGray
+          $cache = Join-Path $env:USERPROFILE '.gradle\caches\modules-2\files-2.1'
+          if (-not (Test-Path $cache)) { Fail "未找到 Gradle 缓存（$cache）。请先运行一次 gradle 以下载依赖。" 3 }
+          $required = @(
+              @{ name = 'junit-platform-launcher'; pathKey = 'org.junit.platform\junit-platform-launcher';  rx = 'junit-platform-launcher-1\.\d+\.\d+\.jar$' },
+              @{ name = 'junit-platform-engine';   pathKey = 'org.junit.platform\junit-platform-engine';    rx = 'junit-platform-engine-1\.\d+\.\d+\.jar$' },
+              @{ name = 'junit-platform-commons';  pathKey = 'org.junit.platform\junit-platform-commons';   rx = 'junit-platform-commons-1\.\d+\.\d+\.jar$' },
+              @{ name = 'junit-jupiter-engine';    pathKey = 'org.junit.jupiter\junit-jupiter-engine';      rx = 'junit-jupiter-engine-5\.\d+\.\d+\.jar$' },
+              @{ name = 'junit-jupiter-api';       pathKey = 'org.junit.jupiter\junit-jupiter-api';         rx = 'junit-jupiter-api-5\.\d+\.\d+\.jar$' },
+              @{ name = 'opentest4j';              pathKey = 'org.opentest4j\opentest4j';                    rx = 'opentest4j-1\.\d+\.\d+\.jar$' },
+              @{ name = 'apiguardian-api';         pathKey = 'org.apiguardian\apiguardian-api';             rx = 'apiguardian-api-1\.\d+\.\d+\.jar$' }
+          )
+          $junitJars = @()
+          foreach ($r in $required) {
+              $jar = Get-ChildItem $cache -Recurse -File -ErrorAction SilentlyContinue |
+                     Where-Object { $_.FullName.Contains($r.pathKey) -and $_.Name -match $r.rx -and $_.FullName -notmatch 'sources|javadoc' } |
+                     Sort-Object FullName -Descending | Select-Object -First 1
+              if (-not $jar) { Fail "Gradle 缓存中缺少 $($r.name)（坐标目录 $($r.pathKey)）。请先运行 gradle 以下载 JUnit。" 3 }
+              $junitJars += $jar.FullName
+          }
+          Write-Host ("JUnit jar: {0} 个" -f $junitJars.Count) -ForegroundColor DarkGray
+          $junitCp = $junitJars -join ';'
+          $runtimeSpecs = @(
+              @{ name = 'slf4j-api';        pathKey = 'org.slf4j\slf4j-api';                 rx = 'slf4j-api-2\.\d+\.\d+\.jar$' },
+              @{ name = 'gson';             pathKey = 'com.google.code.gson\gson';           rx = 'gson-2\.\d+(\.\d+)?\.jar$' },
+              @{ name = 'Java-WebSocket';   pathKey = 'org.java-websocket\Java-WebSocket';   rx = 'Java-WebSocket-1\.\d+(\.\d+)?\.jar$' },
+              @{ name = 'commons-compress'; pathKey = 'org.apache.commons\commons-compress'; rx = 'commons-compress-1\.\d+(\.\d+)?\.jar$' }
+          )
+          $runtimeJars = @()
+          $m2 = Join-Path $env:USERPROFILE '.m2\repository'
+          foreach ($r in $runtimeSpecs) {
+              $jar = @(Get-ChildItem $cache -Recurse -File -ErrorAction SilentlyContinue |
+                       Where-Object { $_.FullName.Contains($r.pathKey) -and $_.Name -match $r.rx -and $_.FullName -notmatch 'sources|javadoc' } |
+                       Sort-Object FullName -Descending | Select-Object -First 1)
+              if ($jar.Count -eq 0 -and (Test-Path $m2)) {
+                  $key = $r.pathKey.Replace('\', '/').Replace('.', '/')
+                  $jar = @(Get-ChildItem $m2 -Recurse -File -ErrorAction SilentlyContinue |
+                           Where-Object { $_.FullName.Replace('\', '/').Contains($key) -and $_.Name -match $r.rx } |
+                           Sort-Object FullName -Descending | Select-Object -First 1)
+                  if ($jar.Count -gt 0) { Write-Host ("  {0} 取自本地 m2 仓库" -f $r.name) -ForegroundColor DarkGray }
+              }
+              if ($jar.Count -gt 0) {
+                  $runtimeJars += $jar[0].FullName
+              } else {
+                  Write-Host ("提示: 缓存中未找到 {0}，若主源码编译报缺包请先运行 gradle 下载" -f $r.name) -ForegroundColor Yellow
+              }
+          }
+          $runtimeCp = $runtimeJars -join ';'
+          Write-Host ("运行期依赖 jar: {0} 个" -f $runtimeJars.Count) -ForegroundColor DarkGray
+          $mainSrc = Join-Path $root 'ender_core\src\main\java'
+          $testSrc = Join-Path $root 'ender_core\src\test\java'
+          $outMain = Join-Path $root 'build\core-test-classes-main'
+          $outTest = Join-Path $root 'build\core-test-classes'
+          $outRunner = Join-Path $root 'build\core-test-runner'
+          $results = Join-Path $root 'build\core-test-results'
+          if (-not $SkipCompile) {
+              Remove-Item $outMain, $outTest, $outRunner -Recurse -Force -ErrorAction SilentlyContinue
+              foreach ($d in @($outMain, $outTest, $outRunner, $results)) {
+                  New-Item -ItemType Directory -Path $d -Force | Out-Null
+              }
+              Write-Host '编译主源码 ender_core/src/main/java ...' -ForegroundColor Cyan
+              if ($OnlyFiles -ne '') {
+                  $mainFiles = @()
+                  foreach ($rel in ($OnlyFiles -split ',')) {
+                      $file = Join-Path $mainSrc ($rel.Trim() -replace '/', '\')
+                      if (-not (Test-Path $file)) { Fail "-OnlyFiles 指定的文件不存在: $rel" 3 }
+                      $mainFiles += (Resolve-Path $file).Path
+                  }
+                  Write-Host ("  文件级编译 {0} 个文件" -f $mainFiles.Count) -ForegroundColor DarkGray
+              } elseif ($OnlySources -ne '') {
+                  $mainFiles = @()
+                  foreach ($rel in ($OnlySources -split ',')) {
+                      $dir = Join-Path $mainSrc ($rel.Trim() -replace '/', '\')
+                      if (-not (Test-Path $dir)) { Fail "-OnlySources 指定的目录不存在: $rel" 3 }
+                      $mainFiles += (Get-ChildItem $dir -Recurse -File -Filter '*.java' | ForEach-Object { $_.FullName })
+                  }
+                  Write-Host ("  选择性编译 {0} 个文件（{1}）" -f $mainFiles.Count, $OnlySources) -ForegroundColor DarkGray
+              } else {
+                  $mainFiles = Get-ChildItem $mainSrc -Recurse -File -Filter '*.java' | ForEach-Object { $_.FullName }
+              }
+              $sourcesFile = Join-Path $env:TEMP 'eo-main-sources.txt'
+              [System.IO.File]::WriteAllLines($sourcesFile, $mainFiles, (New-Object System.Text.UTF8Encoding($false)))
+              & $javac -encoding UTF-8 -cp $runtimeCp -d $outMain "@$sourcesFile" 2>&1 | ForEach-Object { Write-Host $_ }
+              if ($LASTEXITCODE -ne 0) { Fail "主源码编译失败（exit $LASTEXITCODE）" 3 }
+              Write-Host '编译测试源码 ender_core/src/test/java ...' -ForegroundColor Cyan
+              if (-not (Test-Path $testSrc)) { Fail "测试目录不存在: $testSrc" 3 }
+              $possibleJars = Get-ChildItem $cache -Recurse -File -Filter '*.jar' -ErrorAction SilentlyContinue |
+                              Where-Object { $_.FullName -notmatch 'sources|javadoc' -and
+                                             $_.Name -match 'annotation|AutoService|jsr305|checker-qual|error_prone' } |
+                              ForEach-Object { $_.FullName }
+              $testCp = (@($junitCp) + @($runtimeCp) + @($possibleJars)) -join ';'
+              $testFiles = Get-ChildItem $testSrc -Recurse -File -Filter '*.java' | ForEach-Object { $_.FullName }
+              $testSourcesFile = Join-Path $env:TEMP 'eo-test-sources.txt'
+              [System.IO.File]::WriteAllLines($testSourcesFile, $testFiles, (New-Object System.Text.UTF8Encoding($false)))
+              & $javac -encoding UTF-8 -cp "$outMain;$testCp" -d $outTest "@$testSourcesFile" 2>&1 | ForEach-Object { Write-Host $_ }
+              if ($LASTEXITCODE -ne 0) { Fail "测试源码编译失败（exit $LASTEXITCODE）" 3 }
+              Write-Host '编译测试运行器 ...' -ForegroundColor Cyan
+              $runnerSrc = Join-Path $env:RUNNER_TEMP 'ender-core-runner\tools\CoreTestRunner.java'
+          if (-not (Test-Path $runnerSrc)) { throw 'CoreTestRunner.java missing; the workflow must write it first' }
+              & $javac -encoding UTF-8 -cp $junitCp -d $outRunner $runnerSrc 2>&1 | ForEach-Object { Write-Host $_ }
+              if ($LASTEXITCODE -ne 0) { Fail "测试运行器编译失败（exit $LASTEXITCODE）" 3 }
+          } else {
+              if (-not (Test-Path $outTest)) { Fail "-SkipCompile 指定了，但编译产物不存在: $outTest" 3 }
+          }
+          Write-Host ''
+          Write-Host '================ 运行 ender_core 单元测试 ================' -ForegroundColor White
+          if ($Filter -ne '') { Write-Host "过滤: $Filter" -ForegroundColor DarkGray }
+          $runCp = @($outRunner, $outTest, $outMain) + $junitJars + $runtimeJars
+          $cp = $runCp -join ';'
+          try {
+              [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+              $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+          } catch {
+              Write-Host '提示: 无法切换控制台编码为 UTF-8，中文测试名可能显示为乱码' -ForegroundColor Yellow
+          }
+          & $java '-Dfile.encoding=UTF-8' '-Dstdout.encoding=UTF-8' '-Dstderr.encoding=UTF-8' `
+                  '-Djava.awt.headless=true' '-cp' "$cp" 'tools.CoreTestRunner' "$results" "$Filter" 2>&1 |
+              ForEach-Object { Write-Host $_ }
+          exit $LASTEXITCODE
 
   build:
-    name: 构建 ${{ matrix.loader }}
+    name: Build ${{ matrix.loader }}
     needs: test
     runs-on: ubuntu-latest
     permissions:
@@ -78,28 +1415,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Fabric 已于 v3.1 终止支持（见 claude_docs/00-decisions-and-open-questions.md 的 ADR-00）
         loader: [forge, neoforge]
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Setup JDK 21
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v4
 
       - name: Get versions
         id: vars
-        run: |
-          echo "mod_version=$(grep '^mod_version=' gradle.properties | cut -d'=' -f2)" >> "$GITHUB_OUTPUT"
+        run: echo "mod_version=$(grep '^mod_version=' gradle.properties | cut -d'=' -f2)" >> "$GITHUB_OUTPUT"
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew
@@ -117,31 +1449,27 @@ jobs:
           cp "$SRC" "dist/EnderOnline-v${MOD_VERSION}-${BRANCH_NAME}-${LOADER}.jar"
           ls -l dist
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: ender-online-${{ matrix.loader }}
           path: dist/*.jar
 
   release:
-    name: 发布
+    name: Release
     needs: build
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 下载全部产物
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
-      - name: Create or update GitHub Release
-        uses: ncipollo/release-action@v1
+      - uses: ncipollo/release-action@v1
         with:
           tag: ${{ github.ref_name }}
           name: EnderOnline ${{ github.ref_name }}
