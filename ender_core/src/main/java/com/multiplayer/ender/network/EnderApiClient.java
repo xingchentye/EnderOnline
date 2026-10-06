@@ -306,18 +306,6 @@ public class EnderApiClient {
     }
 
     /**
-     * 获取元数据。
-     *
-     * FIXME(P3, 2026-10-06): 当前为占位实现，返回的是写死的兼容标识，
-     * 不反映真实版本，接入真实元数据前调用方不得依赖其内容。
-     *
-     * @return 已完成、结果恒为 {"version": "ender_core_compat"} 的 Future，永不为 null
-     */
-    public static CompletableFuture<String> getMeta() {
-        return CompletableFuture.completedFuture("{\"version\": \"ender_core_compat\"}");
-    }
-
-    /**
      * 同步获取房间管理状态。
      *
      * @return 状态对象的深拷贝，永不为 null；调用方修改副本不会影响内部状态
@@ -389,15 +377,28 @@ public class EnderApiClient {
     }
 
     /**
-     * 检查客户端健康状态。
+     * 检查后台服务是否仍在运行。
      *
-     * FIXME(P3, 2026-10-06): 当前恒返回 true，不探测任何连接，
-     * 健康检查在语义上尚未实现，调用方不能据此判断服务可用。
+     * 判定依据是动态端口是否被占用。该端口由 {@link #setPort(int)} 记下，
+     * 写入的是 Minecraft 集成服务器的监听端口（同时用作 EasyTier 的 rpcPort），
+     * 因此「已被占用」等价于「上一次启动的后台世界仍在监听」。
      *
-     * @return 已完成、结果恒为 true 的 Future，永不为 null
+     * 为什么不用 currentState 或 scaffoldingClient 判定：复用分支的典型场景是
+     * 玩家退回主菜单后重新进入，此时状态已复位为 IDLE、Scaffolding 客户端也已停止，
+     * 但后台世界仍在运行。用它们判定会把健康误报为不健康，进而触发一次多余的重启。
+     *
+     * 未设置动态端口（{@link #hasDynamicPort()} 为 false）时返回 true：
+     * 此时不存在「需要复用的后台服务」这一前提，调用方会走完整启动流程。
+     *
+     * 线程安全性：本方法执行一次阻塞式端口探测，应在异步上下文调用，不要放在渲染线程。
+     *
+     * @return 已完成、结果表示后台服务是否可复用的 Future，永不为 null
      */
     public static CompletableFuture<Boolean> checkHealth() {
-        return CompletableFuture.completedFuture(true);
+        if (!hasDynamicPort()) {
+            return CompletableFuture.completedFuture(true);
+        }
+        return CompletableFuture.completedFuture(!PortAllocator.isPortAvailable(getPort()));
     }
 
     /**
@@ -415,32 +416,6 @@ public class EnderApiClient {
         // 复用 setIdle 的清理序列，仅额外清掉动态端口（因此局域网广播会随之中止）
         setIdle();
         clearDynamicPort();
-        return CompletableFuture.completedFuture(null);
-    }
-
-    /**
-     * 获取日志内容。
-     *
-     * FIXME(P3, 2026-10-06): 当前恒返回空字符串，日志能力未实现，
-     * 依赖本方法展示日志的界面会一直显示为空。
-     *
-     * @param fetch 是否获取最新日志，当前实现忽略该参数
-     * @return 已完成、结果恒为空字符串的 Future，永不为 null
-     */
-    public static CompletableFuture<String> getLog(boolean fetch) {
-        return CompletableFuture.completedFuture("");
-    }
-
-    /**
-     * 设置正在扫描的玩家。
-     *
-     * FIXME(P3, 2026-10-06): 当前为空实现，入参被丢弃且不产生任何效果，
-     * 该能力尚未实现，调用方不应依赖。
-     *
-     * @param player 玩家名称，当前实现忽略该参数
-     * @return 已完成、无返回值的 Future，永不为 null
-     */
-    public static CompletableFuture<Void> setScanning(String player) {
         return CompletableFuture.completedFuture(null);
     }
 
