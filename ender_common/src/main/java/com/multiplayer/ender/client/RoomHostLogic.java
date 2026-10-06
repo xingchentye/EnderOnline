@@ -33,17 +33,19 @@ import java.util.List;
  * 2. syncFromMinecraft 仅在 initialized 由 false 翻转为 true 的那一个周期执行一次；
  *    此后每个周期只做「拉取后端状态并应用」。因此运行期直接改动服务器规则不会被自动回传，
  *    除非重新进入托管状态。
- * 3. 本类保留了多组反射回退链，成因是 Fabric 时期需要同时支持 Yarn 与 Mojmap 两套映射，
+ * 3. 规则写入与玩家操作已上移到 ServerRuleWriter 与 ServerPlayerActions，
+ *    与 EnderDashboard 的界面生效路径共用一份实现，本类只保留薄委托。
+ *    那两处的反射回退链成因是 Fabric 时期需要同时支持 Yarn 与 Mojmap 两套映射，
  *    同一语义在两套映射下方法名不同：作弊权限（Yarn areCheatsAllowed /
- *    Mojmap isAllowCheatsForAllPlayers）、PvP（Yarn isPvpEnabled / Mojmap isPvpAllowed）、
- *    出生点保护（getSpawnProtectionRadius 在不同版本分别挂在服务器与玩家列表上）。
- *    本类中 PvP 已直接调用 Mojmap 的 isPvpAllowed，作弊权限、出生点保护、游戏模式切换
- *    与游戏规则字段仍保留回退链。Fabric 终止后两端已统一使用官方映射，
+ *    Mojmap isAllowCheatsForAllPlayers）、出生点保护（getSpawnProtectionRadius
+ *    在不同版本分别挂在服务器与玩家列表上）、游戏规则字段名与时间设置。
+ *    本类中 PvP 已直接调用 Mojmap 的 isPvpAllowed。Fabric 终止后两端已统一使用官方映射，
  *    这些回退链已无存在必要，属 ADR-03 的待消除目标。
  * 4. 所有反射失败都被静默吞掉，以保证 tick 不中断；代价是映射不匹配时表现为
  *    「设置点了不生效」而不是报错。
  *
- * TODO(ADR-03, 2026-09-30): 删除反射回退链，改为直接调用 Mojmap 方法并显式上报失败。
+ * TODO(ADR-03, 2026-09-30): 删除 ServerRuleWriter 与 ServerPlayerActions 中的反射回退链，
+ * 改为直接调用 Mojmap 方法并显式上报失败。
  *
  * 线程安全性：onServerTick 由 ServerTickHandler 在服务器主线程调用；applyState 会改写
  * 游戏规则、踢出玩家、切换游戏模式，因此同样只允许在服务器线程调用，本类不做内部加锁。
@@ -241,51 +243,53 @@ public class RoomHostLogic {
      * @param state 房间管理状态 JSON，不能为 null
      */
     private static void enforceGameRules(MinecraftServer server, JsonObject state) {
-        if (state.has("allow_pvp")) {
-            boolean pvp = state.get("allow_pvp").getAsBoolean();
-            if (server.isPvpAllowed() != pvp) {
-                server.setPvpAllowed(pvp);
-            }
-        }
-        
-        if (state.has("allow_cheats")) {
-            setCheatsAllowed(server, state.get("allow_cheats").getAsBoolean());
-        }
-        
-        if (state.has("spawn_protection")) {
-             setSpawnProtection(server, state.get("spawn_protection").getAsInt());
+        // 规则写入统一交给 ServerRuleWriter，与 EnderDashboard 的界面生效路径共用一份实现，
+        // 本方法只负责「键是否存在」的判定：缺失的键必须跳过而不是补默认值，
+        // 否则后端局部下发时会把未提及的配置一并覆盖掉。
+        if (state.has("keep_inventory")) {
+            ServerRuleWriter.setBooleanGameRule(server, state.get("keep_inventory").getAsBoolean(),
+                    GameRules.RULE_KEEPINVENTORY);
         }
 
-        if (state.has("keep_inventory")) {
-            boolean val = state.get("keep_inventory").getAsBoolean();
-            setBooleanGameRule(server, val, GameRules.RULE_KEEPINVENTORY);
-        }
-        
         if (state.has("mob_spawning")) {
-            boolean val = state.get("mob_spawning").getAsBoolean();
-            setBooleanGameRule(server, val, "RULE_DOMOBSPAWNING", "RULE_DO_MOB_SPAWNING");
+            ServerRuleWriter.setBooleanGameRule(server, state.get("mob_spawning").getAsBoolean(),
+                    "RULE_DOMOBSPAWNING", "RULE_DO_MOB_SPAWNING");
         }
-        
+
         if (state.has("fire_spread")) {
-            boolean val = state.get("fire_spread").getAsBoolean();
-            setBooleanGameRule(server, val, "RULE_DOFIRETICK", "RULE_DO_FIRE_TICK");
+            ServerRuleWriter.setBooleanGameRule(server, state.get("fire_spread").getAsBoolean(),
+                    "RULE_DOFIRETICK", "RULE_DO_FIRE_TICK");
         }
-        
+
         if (state.has("weather_lock")) {
-             boolean val = state.get("weather_lock").getAsBoolean();
-             setBooleanGameRule(server, !val, GameRules.RULE_WEATHER_CYCLE);
+            ServerRuleWriter.setBooleanGameRule(server, !state.get("weather_lock").getAsBoolean(),
+                    GameRules.RULE_WEATHER_CYCLE);
+        }
+
+        if (state.has("allow_pvp")) {
+            server.setPvpAllowed(state.get("allow_pvp").getAsBoolean());
+        }
+
+        if (state.has("allow_cheats")) {
+            ServerRuleWriter.setCheatsAllowed(server, state.get("allow_cheats").getAsBoolean());
+        }
+
+        if (state.has("spawn_protection")) {
+            ServerRuleWriter.setSpawnProtection(server, state.get("spawn_protection").getAsInt());
         }
 
         if (state.has("time_lock")) {
             String mode = state.get("time_lock").getAsString();
             boolean cycle = "cycle".equals(mode);
-            setBooleanGameRule(server, cycle, "RULE_DAYLIGHT", "RULE_DAYLIGHT_CYCLE", "RULE_DO_DAYLIGHT_CYCLE");
+            ServerRuleWriter.setBooleanGameRule(server, cycle,
+                    "RULE_DAYLIGHT", "RULE_DAYLIGHT_CYCLE", "RULE_DO_DAYLIGHT_CYCLE");
             if (!cycle) {
                 ServerLevel level = server.overworld();
                 if (level != null) {
+                    // 偏差不超过 1000 刻时不动，避免每个轮询周期都设置一次时间。
                     long time = "night".equals(mode) ? 13000L : 1000L;
                     if (Math.abs(level.getDayTime() % 24000 - time) > 1000) {
-                        level.setDayTime(time);
+                        ServerRuleWriter.applyTimeMode(server, mode);
                     }
                 }
             }
@@ -302,9 +306,8 @@ public class RoomHostLogic {
      * @param reason 断开原因，会展示在玩家侧，不能为 null
      */
     private static void disconnectPlayer(ServerPlayer player, Component reason) {
-        try {
-            player.connection.disconnect(reason);
-        } catch (Exception ignored) {}
+        // 实现已上移到 ServerPlayerActions，与 EnderDashboard 共用一份。
+        ServerPlayerActions.disconnectPlayer(player, reason);
     }
     
     /**
@@ -316,92 +319,7 @@ public class RoomHostLogic {
      * @param type 目标游戏模式，不能为 null
      */
     private static void setPlayerGameType(ServerPlayer player, GameType type) {
-        if (player.gameMode.getGameModeForPlayer() == type) return;
-        try {
-            java.lang.reflect.Method m = player.getClass().getMethod("setGameMode", GameType.class);
-            m.invoke(player, type);
-        } catch (Exception ignored) {}
-    }
-    
-    /**
-     * 写回「允许所有玩家使用命令」开关。
-     *
-     * 依次尝试 Mojmap 的 setAllowCheatsForAllPlayers 与 Yarn 遗留的
-     * setAllowCommandsForAllPlayers；两者都失败时静默忽略，开关维持原状。
-     *
-     * @param server 当前 Minecraft 服务器实例，不能为 null
-     * @param value 目标开关值
-     */
-    private static void setCheatsAllowed(MinecraftServer server, boolean value) {
-        try {
-            Object playerList = server.getPlayerList();
-            java.lang.reflect.Method m = playerList.getClass().getMethod("setAllowCheatsForAllPlayers", boolean.class);
-            m.invoke(playerList, value);
-            return;
-        } catch (Exception ignored) {}
-        try {
-            Object playerList = server.getPlayerList();
-            java.lang.reflect.Method m = playerList.getClass().getMethod("setAllowCommandsForAllPlayers", boolean.class);
-            m.invoke(playerList, value);
-        } catch (Exception ignored) {}
-    }
-    
-    /**
-     * 写回出生点保护半径。
-     *
-     * 半径先做 Math.max(0, value) 归一化，负值按 0 处理；随后依次尝试
-     * setSpawnProtectionRadius 与 Yarn 遗留的 setSpawnProtection，都失败时静默忽略。
-     *
-     * @param server 当前 Minecraft 服务器实例，不能为 null
-     * @param value 目标半径，单位方块；负值会被归一化为 0
-     */
-    private static void setSpawnProtection(MinecraftServer server, int value) {
-        int radius = Math.max(0, value);
-        try {
-            Object playerList = server.getPlayerList();
-            java.lang.reflect.Method m = playerList.getClass().getMethod("setSpawnProtectionRadius", int.class);
-            m.invoke(playerList, radius);
-            return;
-        } catch (Exception ignored) {}
-        try {
-            Object playerList = server.getPlayerList();
-            java.lang.reflect.Method m = playerList.getClass().getMethod("setSpawnProtection", int.class);
-            m.invoke(playerList, radius);
-        } catch (Exception ignored) {}
-    }
-    
-    /**
-     * 按已知的游戏规则键写入布尔值。
-     *
-     * @param server 当前 Minecraft 服务器实例，不能为 null
-     * @param value 目标规则值
-     * @param key 游戏规则键，不能为 null
-     */
-    private static void setBooleanGameRule(MinecraftServer server, boolean value, GameRules.Key<GameRules.BooleanValue> key) {
-        server.getGameRules().getRule(key).set(value, server);
-    }
-
-    /**
-     * 按候选字段名反射定位游戏规则键并写入布尔值。
-     *
-     * 命中第一个可用字段后立即返回；全部候选失败时静默忽略，规则维持原值。
-     *
-     * @param server 当前 Minecraft 服务器实例，允许为 null，为 null 时直接返回
-     * @param value 目标规则值
-     * @param fieldNames 候选的 GameRules 静态字段名，按优先级排列；允许为 null
-     */
-    private static void setBooleanGameRule(MinecraftServer server, boolean value, String... fieldNames) {
-        if (server == null || fieldNames == null) return;
-        for (String fieldName : fieldNames) {
-            if (fieldName == null || fieldName.isBlank()) continue;
-            try {
-                java.lang.reflect.Field f = GameRules.class.getField(fieldName);
-                Object key = f.get(null);
-                if (key instanceof GameRules.Key) {
-                    server.getGameRules().getRule((GameRules.Key<GameRules.BooleanValue>) key).set(value, server);
-                    return;
-                }
-            } catch (Exception ignored) {}
-        }
+        // 实现已上移到 ServerPlayerActions，与 EnderDashboard 共用一份。
+        ServerPlayerActions.setPlayerGameType(player, type);
     }
 }

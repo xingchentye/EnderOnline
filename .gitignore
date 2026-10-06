@@ -30,4 +30,5 @@ docs
 scripts
 
 .vscode
+.claude
 CLAUDE.md

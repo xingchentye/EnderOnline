@@ -11,6 +11,8 @@ package com.multiplayer.ender.client.gui;
 import com.endercore.core.comm.EnderLifecycle;
 
 import com.multiplayer.ender.client.PlatformConfigHolder;
+import com.multiplayer.ender.client.ServerPlayerActions;
+import com.multiplayer.ender.client.ServerRuleWriter;
 import com.multiplayer.ender.logic.AccessControlRules;
 import com.multiplayer.ender.logic.InputParsers;
 import com.multiplayer.ender.client.UserNotifierHolder;
@@ -1950,21 +1952,15 @@ public class EnderDashboard extends EnderBaseScreen {
         if (server == null) {
             return;
         }
-        server.getGameRules().getRule(GameRules.RULE_KEEPINVENTORY).set(keepInventory, server);
-        server.getGameRules().getRule(GameRules.RULE_WEATHER_CYCLE).set(!weatherLock, server);
-        setBooleanGameRule(server, fireSpread, "RULE_DOFIRETICK", "RULE_DO_FIRE_TICK");
-        setBooleanGameRule(server, mobSpawning, "RULE_DOMOBSPAWNING", "RULE_DO_MOB_SPAWNING");
-        boolean cycle = "cycle".equals(timeControl);
-        setBooleanGameRule(server, cycle, "RULE_DAYLIGHT", "RULE_DAYLIGHT_CYCLE", "RULE_DO_DAYLIGHT_CYCLE");
-        if (!cycle) {
-            ServerLevel level = server.overworld();
-            if (level != null) {
-                setWorldTime(level, "night".equals(timeControl) ? 13000L : 1000L);
-            }
-        }
+        // 规则写入统一交给 ServerRuleWriter，与 RoomHostLogic 的轮询路径共用一份实现。
+        ServerRuleWriter.setBooleanGameRule(server, keepInventory, GameRules.RULE_KEEPINVENTORY);
+        ServerRuleWriter.setBooleanGameRule(server, !weatherLock, GameRules.RULE_WEATHER_CYCLE);
+        ServerRuleWriter.setBooleanGameRule(server, fireSpread, "RULE_DOFIRETICK", "RULE_DO_FIRE_TICK");
+        ServerRuleWriter.setBooleanGameRule(server, mobSpawning, "RULE_DOMOBSPAWNING", "RULE_DO_MOB_SPAWNING");
+        ServerRuleWriter.applyTimeMode(server, timeControl);
         server.setPvpAllowed(pvpAllowed);
-        setCheatsAllowed(server, allowCheats);
-        setSpawnProtection(server, spawnProtection);
+        ServerRuleWriter.setCheatsAllowed(server, allowCheats);
+        ServerRuleWriter.setSpawnProtection(server, spawnProtection);
     }
 
     /**
@@ -2012,13 +2008,13 @@ public class EnderDashboard extends EnderBaseScreen {
                     blacklist, whitelist, whitelistEnabled, visitorPermission, hostName, name);
             switch (outcome.decision()) {
                 case DISCONNECT:
-                    disconnectPlayer(player, Component.literal(outcome.reason()));
+                    ServerPlayerActions.disconnectPlayer(player, Component.literal(outcome.reason()));
                     break;
                 case SPECTATOR:
-                    setPlayerGameType(player, GameType.SPECTATOR);
+                    ServerPlayerActions.setPlayerGameType(player, GameType.SPECTATOR);
                     break;
                 case ADVENTURE:
-                    setPlayerGameType(player, GameType.ADVENTURE);
+                    ServerPlayerActions.setPlayerGameType(player, GameType.ADVENTURE);
                     break;
                 default:
                     break;
@@ -2029,164 +2025,11 @@ public class EnderDashboard extends EnderBaseScreen {
 
 
 
-    /**
-     * 把玩家踢出当前世界。
-     *
-     * 失败被静默忽略：玩家可能已经断开，此时踢出是空操作。
-     *
-     * @param player 目标玩家，不能为 null
-     * @param reason 断开原因，不能为 null
-     */
-    private void disconnectPlayer(ServerPlayer player, Component reason) {
-        try {
-            player.connection.disconnect(reason);
-        } catch (Exception ignored) {
-        }
-    }
 
-    /**
-     * 设置玩家游戏模式。
-     *
-     * 走反射回退链（见类注释约束 3），失败静默忽略——是 ADR-03 的待消除目标。
-     *
-     * @param player 目标玩家，不能为 null
-     * @param type 目标游戏模式，不能为 null
-     */
-    private void setPlayerGameType(ServerPlayer player, GameType type) {
-        try {
-            java.lang.reflect.Method m = player.getClass().getMethod("setGameMode", GameType.class);
-            m.invoke(player, type);
-        } catch (Exception ignored) {
-        }
-    }
 
-    /**
-     * 设置「允许所有玩家作弊」。
-     *
-     * 走反射回退链（见类注释约束 3）：先试 setAllowCheatsForAllPlayers，失败再试 setAllowCommandsForAllPlayers。
-     *
-     * @param server 当前集成服务器，不能为 null
-     * @param value 是否允许
-     */
-    private void setCheatsAllowed(IntegratedServer server, boolean value) {
-        try {
-            Object playerList = server.getPlayerList();
-            java.lang.reflect.Method m = playerList.getClass().getMethod("setAllowCheatsForAllPlayers", boolean.class);
-            m.invoke(playerList, value);
-            return;
-        } catch (Exception ignored) {
-        }
-        try {
-            Object playerList = server.getPlayerList();
-            java.lang.reflect.Method m = playerList.getClass().getMethod("setAllowCommandsForAllPlayers", boolean.class);
-            m.invoke(playerList, value);
-        } catch (Exception ignored) {
-        }
-    }
 
-    /**
-     * 设置出生点保护半径。
-     *
-     * 负值归零；具体写入走反射回退链（见类注释约束 3）。
-     *
-     * @param server 当前集成服务器，不能为 null
-     * @param value 半径，单位为方块；负值按 0 处理
-     */
-    private void setSpawnProtection(IntegratedServer server, int value) {
-        int radius = Math.max(0, value);
-        try {
-            Object playerList = server.getPlayerList();
-            java.lang.reflect.Method m = playerList.getClass().getMethod("setSpawnProtectionRadius", int.class);
-            m.invoke(playerList, radius);
-            return;
-        } catch (Exception ignored) {
-        }
-        try {
-            Object playerList = server.getPlayerList();
-            java.lang.reflect.Method m = playerList.getClass().getMethod("setSpawnProtection", int.class);
-            m.invoke(playerList, radius);
-        } catch (Exception ignored) {
-        }
-    }
 
-    /**
-     * 按候选字段名设置布尔游戏规则。
-     *
-     * 这是本文件里最重的一处反射回退链（见类注释约束 3）：先按字段名拿静态 Key，再尝试用
-     * {@code getRule(Class)} 取规则，失败则遍历全部单参 {@code getRule} 方法，最后遍历规则对象上
-     * 「首参为 boolean 的双参 set 方法」来写入。每一层失败都被静默吞掉。
-     *
-     * @param server 当前集成服务器，允许为 null（为 null 时直接返回）
-     * @param value 目标值
-     * @param fieldNames 候选字段名，按优先级排列；空名会被跳过
-     */
-    private void setBooleanGameRule(IntegratedServer server, boolean value, String... fieldNames) {
-        if (server == null || fieldNames == null) {
-            return;
-        }
-        Object gameRules = server.getGameRules();
-        for (String fieldName : fieldNames) {
-            if (fieldName == null || fieldName.isBlank()) {
-                continue;
-            }
-            try {
-                java.lang.reflect.Field f = GameRules.class.getField(fieldName);
-                Object key = f.get(null);
-                Object rule = null;
-                try {
-                    java.lang.reflect.Method m = gameRules.getClass().getMethod("getRule", key.getClass());
-                    rule = m.invoke(gameRules, key);
-                } catch (Exception ignored) {
-                    for (java.lang.reflect.Method m : gameRules.getClass().getMethods()) {
-                        if (!"getRule".equals(m.getName()) || m.getParameterCount() != 1) {
-                            continue;
-                        }
-                        rule = m.invoke(gameRules, key);
-                        break;
-                    }
-                }
-                if (rule == null) {
-                    continue;
-                }
-                for (java.lang.reflect.Method m : rule.getClass().getMethods()) {
-                    if (!"set".equals(m.getName()) || m.getParameterCount() != 2) {
-                        continue;
-                    }
-                    Class<?>[] params = m.getParameterTypes();
-                    if (params.length == 2 && params[0] == boolean.class) {
-                        m.invoke(rule, value, server);
-                        return;
-                    }
-                }
-            } catch (Exception ignored) {
-            }
-        }
-    }
 
-    /**
-     * 设置主世界时间。
-     *
-     * 走反射回退链（见类注释约束 3）：先试 setDayTime，失败再试 setTimeOfDay。
-     *
-     * @param level 目标世界，允许为 null（为 null 时直接返回）
-     * @param time 目标时间，单位为 tick（0..23999 为一个昼夜周期）
-     */
-    private void setWorldTime(ServerLevel level, long time) {
-        if (level == null) {
-            return;
-        }
-        try {
-            java.lang.reflect.Method m = level.getClass().getMethod("setDayTime", long.class);
-            m.invoke(level, time);
-            return;
-        } catch (Exception ignored) {
-        }
-        try {
-            java.lang.reflect.Method m = level.getClass().getMethod("setTimeOfDay", long.class);
-            m.invoke(level, time);
-        } catch (Exception ignored) {
-        }
-    }
 
     /**
      * 把当前重生点字段应用到主世界。
@@ -2338,6 +2181,5 @@ public class EnderDashboard extends EnderBaseScreen {
     }
 
 }
-
 
 
