@@ -15,7 +15,6 @@ import com.endercore.core.comm.exception.CoreClosedException;
 import com.endercore.core.comm.exception.CoreConnectException;
 import com.endercore.core.comm.exception.CoreProtocolException;
 import com.endercore.core.comm.exception.CoreRemoteException;
-import com.endercore.core.comm.exception.CoreTimeoutException;
 import com.endercore.core.comm.monitor.ConnectionMetrics;
 import com.endercore.core.comm.monitor.ConnectionMetricsSnapshot;
 import com.endercore.core.comm.monitor.ConnectionState;
@@ -40,7 +39,6 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 
@@ -76,10 +74,13 @@ public final class CoreWebSocketClient implements CoreConnectionManager, CoreMes
     private final ConcurrentHashMap<String, CopyOnWriteArrayList<CoreEventListener>> eventListeners = new ConcurrentHashMap<>();
     /** 不区分种类的全局事件监听器，写少读多。 */
     private final CopyOnWriteArrayList<CoreEventListener> anyEventListeners = new CopyOnWriteArrayList<>();
-    /** 尚未完成的请求，键为 requestId；响应、超时与连接关闭都会将条目移除。 */
-    private final ConcurrentHashMap<Long, PendingRequest> pending = new ConcurrentHashMap<>();
-    /** 请求 ID 分配器，从 1 开始单调递增，同一实例内不会重复。 */
-    private final AtomicLong requestIdSeq = new AtomicLong(1);
+    /**
+     * 在途请求表。
+     *
+     * 表本身与超时调度都归 PendingRequests 所有：响应配对、超时上报与整体失败
+     * 只有一处实现，本类不再直接操作请求条目。
+     */
+    private final PendingRequests pendingRequests;
 
     /**
      * 客户端配置。
@@ -167,6 +168,7 @@ public final class CoreWebSocketClient implements CoreConnectionManager, CoreMes
         this.scheduler = EnderExecutors.scheduled();
         this.codec = new CoreFrameCodec(config.maxFrameBytes());
         this.reconnectPolicy = new ReconnectPolicy(config.reconnectBackoffMin(), config.reconnectBackoffMax());
+        this.pendingRequests = new PendingRequests(scheduler, metrics, this.exceptionHandler);
     }
 
     /**
@@ -250,16 +252,16 @@ public final class CoreWebSocketClient implements CoreConnectionManager, CoreMes
             scheduler.execute(() -> {
                 try {
                     c.closeBlocking();
-                    failPending(new CoreClosedException("连接已关闭"));
+                    pendingRequests.failAll(new CoreClosedException("连接已关闭"));
                     setState(ConnectionState.CLOSED);
                     f.complete(null);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    failPending(new CoreClosedException("连接关闭被中断"));
+                    pendingRequests.failAll(new CoreClosedException("连接关闭被中断"));
                     setState(ConnectionState.CLOSED);
                     f.completeExceptionally(e);
                 } catch (Exception e) {
-                    failPending(new CoreClosedException("连接关闭失败"));
+                    pendingRequests.failAll(new CoreClosedException("连接关闭失败"));
                     setState(ConnectionState.CLOSED);
                     f.completeExceptionally(e);
                 }
@@ -308,31 +310,18 @@ public final class CoreWebSocketClient implements CoreConnectionManager, CoreMes
             return f;
         }
 
-        long requestId = requestIdSeq.getAndIncrement();
+        long requestId = pendingRequests.allocateId();
         CoreFrame requestFrame = new CoreFrame(CoreMessageType.REQUEST, (byte) 0, 0, requestId, kind, payload);
         byte[] bytes = codec.encode(requestFrame);
 
-        CompletableFuture<CoreResponse> future = new CompletableFuture<>();
-        Duration timeout = config.requestTimeout();
-        ScheduledFuture<?> timeoutTask = scheduler.schedule(() -> {
-            PendingRequest removed = pending.remove(requestId);
-            if (removed != null && removed.future.completeExceptionally(new CoreTimeoutException(kind, requestId, timeout))) {
-                metrics.onRequestTimeout();
-                exceptionHandler.onTimeout(new CoreTimeoutException(kind, requestId, timeout));
-            }
-        }, timeout.toMillis(), TimeUnit.MILLISECONDS);
-
-        pending.put(requestId, new PendingRequest(kind, System.nanoTime(), future, timeoutTask));
+        CompletableFuture<CoreResponse> future = pendingRequests.register(requestId, kind, config.requestTimeout());
 
         try {
             metrics.onRequestSent();
             metrics.onFrameSent(bytes.length);
             client.send(bytes);
         } catch (Exception e) {
-            PendingRequest removed = pending.remove(requestId);
-            if (removed != null) {
-                removed.timeoutTask.cancel(false);
-            }
+            pendingRequests.discard(requestId);
             future.completeExceptionally(new CoreConnectException("发送失败: " + kind, e));
         }
 
@@ -395,7 +384,7 @@ public final class CoreWebSocketClient implements CoreConnectionManager, CoreMes
      */
     @Override
     public ConnectionMetricsSnapshot metrics() {
-        return metrics.snapshot(pending.size());
+        return metrics.snapshot(pendingRequests.size());
     }
 
     /**
@@ -532,7 +521,7 @@ public final class CoreWebSocketClient implements CoreConnectionManager, CoreMes
                 } else {
                     setState(ConnectionState.FAILED);
                 }
-                failPending(new CoreClosedException("连接已关闭: code=" + code + ", reason=" + reason));
+                pendingRequests.failAll(new CoreClosedException("连接已关闭: code=" + code + ", reason=" + reason));
                 if (!closing) {
                     exceptionHandler.onConnectionError(new CoreConnectException("连接断开: " + reason, null));
                     if (config.autoReconnect()) {
@@ -566,22 +555,21 @@ public final class CoreWebSocketClient implements CoreConnectionManager, CoreMes
      */
     private void onResponseFrame(CoreFrame frame) {
         metrics.onResponseReceived();
-        PendingRequest pendingRequest = pending.remove(frame.requestId());
+        PendingRequests.PendingRequestView pendingRequest = pendingRequests.match(frame.requestId());
         if (pendingRequest == null) {
             return;
         }
-        pendingRequest.timeoutTask.cancel(false);
 
-        long rttMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - pendingRequest.startNanos);
+        long rttMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - pendingRequest.startNanos());
         metrics.setLastRttMillis(rttMillis);
 
         if (frame.status() == 0) {
-            pendingRequest.future.complete(new CoreResponse(frame.status(), frame.requestId(), frame.kind(), frame.payload()));
+            pendingRequest.future().complete(new CoreResponse(frame.status(), frame.requestId(), frame.kind(), frame.payload()));
         } else {
             String msg = new String(frame.payload(), StandardCharsets.UTF_8);
             CoreRemoteException e = new CoreRemoteException(frame.status(), frame.kind(), frame.requestId(), msg);
             exceptionHandler.onRemoteError(e);
-            pendingRequest.future.completeExceptionally(e);
+            pendingRequest.future().completeExceptionally(e);
         }
     }
 
@@ -681,53 +669,7 @@ public final class CoreWebSocketClient implements CoreConnectionManager, CoreMes
         }
     }
 
-    /**
-     * 让所有挂起请求失败并清空挂起表。
-     *
-     * 每个请求的超时任务会被取消，其 Future 以传入的异常完成。
-     *
-     * @param error 用于完成各 Future 的异常，不能为 null
-     */
-    private void failPending(RuntimeException error) {
-        for (PendingRequest pr : pending.values()) {
-            pr.timeoutTask.cancel(false);
-            pr.future.completeExceptionally(error);
-        }
-        pending.clear();
-    }
 
-    /**
-     * 挂起中的请求。
-     *
-     * 仅在客户端内部使用，承载响应配对所需的 Future、发送时刻与超时任务。
-     *
-     * 线程安全性：字段均为 final，实例写入挂起表后不再修改。
-     */
-    private static final class PendingRequest {
-        /** 请求种类，用于构造超时与远程错误消息。 */
-        private final String kind;
-        /** 发送时刻，单位纳秒，取自 System.nanoTime()，只用于计算相对耗时。 */
-        private final long startNanos;
-        /** 等待响应的 Future，永不为 null。 */
-        private final CompletableFuture<CoreResponse> future;
-        /** 超时定时任务，响应到达或失败时会先取消。 */
-        private final ScheduledFuture<?> timeoutTask;
-
-        /**
-         * 构造挂起请求记录。
-         *
-         * @param kind 请求种类，不能为 null
-         * @param startNanos 发送时刻的纳秒时间戳
-         * @param future 等待响应的 Future，不能为 null
-         * @param timeoutTask 超时定时任务，不能为 null
-         */
-        private PendingRequest(String kind, long startNanos, CompletableFuture<CoreResponse> future, ScheduledFuture<?> timeoutTask) {
-            this.kind = kind;
-            this.startNanos = startNanos;
-            this.future = future;
-            this.timeoutTask = timeoutTask;
-        }
-    }
 
     /**
      * 丢弃全部错误回调的空实现。
