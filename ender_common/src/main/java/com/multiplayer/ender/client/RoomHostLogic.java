@@ -8,8 +8,8 @@
 package com.multiplayer.ender.client;
 
 import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.multiplayer.ender.logic.AccessControlRules;
 import com.multiplayer.ender.network.EnderApiClient;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
@@ -208,31 +208,25 @@ public class RoomHostLogic {
         JsonArray whitelist = state.has("whitelist") ? state.getAsJsonArray("whitelist") : new JsonArray();
         String visitorPermission = state.has("visitor_permission") ? state.get("visitor_permission").getAsString() : "可交互";
 
+        // 白名单是否生效沿用历史推导：名单非空即视为启用（状态 JSON 未携带独立开关）。
+        boolean whitelistEnabled = whitelist.size() > 0;
         List<ServerPlayer> players = server.getPlayerList().getPlayers();
         for (ServerPlayer player : players) {
             String name = player.getGameProfile().getName();
-            if (name != null && hostName != null && name.equalsIgnoreCase(hostName)) {
-                continue;
-            }
-            
-            if (containsName(blacklist, name)) {
-                disconnectPlayer(player, Component.literal("你已被房主加入黑名单"));
-                continue;
-            }
-            if (whitelist.size() > 0 && !containsName(whitelist, name)) {
-                disconnectPlayer(player, Component.literal("你不在白名单中"));
-                continue;
-            }
-            
-            if ("禁止进入".equals(visitorPermission)) {
-                disconnectPlayer(player, Component.literal("房间禁止访客进入"));
-                continue;
-            }
-            
-            if ("仅观战".equals(visitorPermission)) {
-                setPlayerGameType(player, GameType.SPECTATOR);
-            } else if ("仅聊天".equals(visitorPermission)) {
-                setPlayerGameType(player, GameType.ADVENTURE);
+            AccessControlRules.Outcome outcome = AccessControlRules.evaluate(
+                    blacklist, whitelist, whitelistEnabled, visitorPermission, hostName, name);
+            switch (outcome.decision()) {
+                case DISCONNECT:
+                    disconnectPlayer(player, Component.literal(outcome.reason()));
+                    break;
+                case SPECTATOR:
+                    setPlayerGameType(player, GameType.SPECTATOR);
+                    break;
+                case ADVENTURE:
+                    setPlayerGameType(player, GameType.ADVENTURE);
+                    break;
+                default:
+                    break;
             }
         }
     }
@@ -298,22 +292,6 @@ public class RoomHostLogic {
         }
     }
     
-    /**
-     * 判断名单中是否存在指定玩家名。
-     *
-     * 比较方式为忽略大小写（玩家名大小写在不同登录路径下不保证一致）。
-     *
-     * @param array 名单数组，允许为 null，为 null 时返回 false
-     * @param name 玩家名，允许为 null，为 null 时返回 false
-     * @return 命中返回 true，否则返回 false
-     */
-    private static boolean containsName(JsonArray array, String name) {
-        if (array == null || name == null) return false;
-        for (JsonElement el : array) {
-            if (el.getAsString().equalsIgnoreCase(name)) return true;
-        }
-        return false;
-    }
     
     /**
      * 断开指定玩家的连接。

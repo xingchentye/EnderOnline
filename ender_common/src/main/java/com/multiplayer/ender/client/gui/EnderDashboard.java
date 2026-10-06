@@ -11,7 +11,7 @@ package com.multiplayer.ender.client.gui;
 import com.endercore.core.comm.EnderLifecycle;
 
 import com.multiplayer.ender.client.PlatformConfigHolder;
-import com.multiplayer.ender.logic.NameList;
+import com.multiplayer.ender.logic.AccessControlRules;
 import com.multiplayer.ender.client.UserNotifierHolder;
 
 import java.util.ArrayList;
@@ -2007,25 +2007,20 @@ public class EnderDashboard extends EnderBaseScreen {
         List<ServerPlayer> players = server.getPlayerList().getPlayers();
         for (ServerPlayer player : players) {
             String name = player.getGameProfile().getName();
-            if (name != null && name.equalsIgnoreCase(hostName)) {
-                continue;
-            }
-            if (NameList.contains(blacklist, name)) {
-                disconnectPlayer(player, Component.literal("你已被房主加入黑名单"));
-                continue;
-            }
-            if (whitelistEnabled && whitelist != null && !NameList.contains(whitelist, name)) {
-                disconnectPlayer(player, Component.literal("你不在白名单中"));
-                continue;
-            }
-            if ("禁止进入".equals(visitorPermission)) {
-                disconnectPlayer(player, Component.literal("房间禁止访客进入"));
-                continue;
-            }
-            if ("仅观战".equals(visitorPermission)) {
-                setPlayerGameType(player, GameType.SPECTATOR);
-            } else if ("仅聊天".equals(visitorPermission)) {
-                setPlayerGameType(player, GameType.ADVENTURE);
+            AccessControlRules.Outcome outcome = AccessControlRules.evaluate(
+                    blacklist, whitelist, whitelistEnabled, visitorPermission, hostName, name);
+            switch (outcome.decision()) {
+                case DISCONNECT:
+                    disconnectPlayer(player, Component.literal(outcome.reason()));
+                    break;
+                case SPECTATOR:
+                    setPlayerGameType(player, GameType.SPECTATOR);
+                    break;
+                case ADVENTURE:
+                    setPlayerGameType(player, GameType.ADVENTURE);
+                    break;
+                default:
+                    break;
             }
         }
     }
