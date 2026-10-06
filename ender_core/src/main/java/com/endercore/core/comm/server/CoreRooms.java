@@ -164,9 +164,9 @@ public final class CoreRooms {
          */
         private CoreResponse create(CoreRequest req) throws Exception {
             DataInputStream in = new DataInputStream(new ByteArrayInputStream(req.payload()));
-            String name = readString(in);
+            String name = RoomCodec.readString(in);
             int maxMembers = in.readUnsignedShort();
-            String preferredRoomId = readString(in);
+            String preferredRoomId = RoomCodec.readString(in);
             boolean open = in.readUnsignedByte() != 0;
 
             if (name.isBlank() || name.length() > 64) {
@@ -192,13 +192,13 @@ public final class CoreRooms {
 
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             DataOutputStream out = new DataOutputStream(baos);
-            writeString(out, code.code);
-            writeString(out, hostId);
+            RoomCodec.writeString(out, code.code);
+            RoomCodec.writeString(out, hostId);
             out.writeShort(maxMembers);
             out.writeByte(open ? 1 : 0);
-            writeString(out, name);
-            writeString(out, code.networkName);
-            writeString(out, code.networkSecret);
+            RoomCodec.writeString(out, name);
+            RoomCodec.writeString(out, code.networkName);
+            RoomCodec.writeString(out, code.networkSecret);
             return new CoreResponse(0, req.requestId(), req.kind(), baos.toByteArray());
         }
 
@@ -213,7 +213,7 @@ public final class CoreRooms {
      */
     private CoreResponse join(CoreRequest req) throws Exception {
         DataInputStream in = new DataInputStream(new ByteArrayInputStream(req.payload()));
-        String roomIdInput = readString(in);
+        String roomIdInput = RoomCodec.readString(in);
         if (roomIdInput.isBlank()) {
             return error(req, STATUS_INVALID_PAYLOAD, "missing roomId");
         }
@@ -246,20 +246,20 @@ public final class CoreRooms {
         }
 
         if (joinedNow) {
-            server.sendEventToMany(remotes, "room:member_joined", payloadRoomMember(roomId, memberId));
+            server.sendEventToMany(remotes, "room:member_joined", RoomCodec.payloadRoomMember(roomId, memberId));
         }
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         DataOutputStream out = new DataOutputStream(baos);
-        writeString(out, room.id);
-        writeString(out, memberId);
-        writeString(out, room.hostId);
-        writeString(out, room.name);
+        RoomCodec.writeString(out, room.id);
+        RoomCodec.writeString(out, memberId);
+        RoomCodec.writeString(out, room.hostId);
+        RoomCodec.writeString(out, room.name);
         out.writeShort(room.maxMembers);
         out.writeByte(room.open ? 1 : 0);
-        writeMembers(out, room.members.keySet());
-        writeString(out, room.networkName);
-        writeString(out, room.networkSecret);
+        RoomCodec.writeMembers(out, room.members.keySet());
+        RoomCodec.writeString(out, room.networkName);
+        RoomCodec.writeString(out, room.networkSecret);
         return new CoreResponse(0, req.requestId(), req.kind(), baos.toByteArray());
     }
 
@@ -274,7 +274,7 @@ public final class CoreRooms {
      */
     private CoreResponse leave(CoreRequest req) throws Exception {
         DataInputStream in = new DataInputStream(new ByteArrayInputStream(req.payload()));
-        String roomIdInput = readString(in);
+        String roomIdInput = RoomCodec.readString(in);
         if (roomIdInput.isBlank()) {
             return error(req, STATUS_INVALID_PAYLOAD, "missing roomId");
         }
@@ -295,7 +295,7 @@ public final class CoreRooms {
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         DataOutputStream out = new DataOutputStream(baos);
-        writeString(out, roomId);
+        RoomCodec.writeString(out, roomId);
         return new CoreResponse(0, req.requestId(), req.kind(), baos.toByteArray());
     }
 
@@ -349,10 +349,11 @@ public final class CoreRooms {
         }
 
         if (removed && !destroyed) {
-            server.sendEventToMany(remainingRemotes, "room:member_left", payloadRoomMember(room.id, memberId));
+            server.sendEventToMany(remainingRemotes, "room:member_left",
+                    RoomCodec.payloadRoomMember(room.id, memberId));
         }
         if (destroyed) {
-            server.sendEventToMany(remainingRemotes, "room:destroyed", payloadRoom(room.id));
+            server.sendEventToMany(remainingRemotes, "room:destroyed", RoomCodec.payloadRoom(room.id));
         }
         return true;
     }
@@ -388,9 +389,9 @@ public final class CoreRooms {
         DataOutputStream out = new DataOutputStream(baos);
         out.writeShort(page.size());
         for (Room room : page) {
-            writeString(out, room.id);
-            writeString(out, room.name);
-            writeString(out, room.hostId);
+            RoomCodec.writeString(out, room.id);
+            RoomCodec.writeString(out, room.name);
+            RoomCodec.writeString(out, room.hostId);
             out.writeShort(room.members.size());
             out.writeShort(room.maxMembers);
             out.writeByte(room.open ? 1 : 0);
@@ -409,7 +410,7 @@ public final class CoreRooms {
      */
     private CoreResponse info(CoreRequest req) throws Exception {
             DataInputStream in = new DataInputStream(new ByteArrayInputStream(req.payload()));
-            String roomIdInput = readString(in);
+            String roomIdInput = RoomCodec.readString(in);
             if (roomIdInput.isBlank()) {
                 return error(req, STATUS_INVALID_PAYLOAD, "missing roomId");
             }
@@ -425,20 +426,20 @@ public final class CoreRooms {
 
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             DataOutputStream out = new DataOutputStream(baos);
-            writeString(out, room.id);
-            writeString(out, room.name);
-            writeString(out, room.hostId);
+            RoomCodec.writeString(out, room.id);
+            RoomCodec.writeString(out, room.name);
+            RoomCodec.writeString(out, room.hostId);
             out.writeLong(room.createdAtMillis);
             out.writeShort(room.maxMembers);
             out.writeByte(room.open ? 1 : 0);
-            writeMembers(out, room.members.keySet());
+            RoomCodec.writeMembers(out, room.members.keySet());
             byte[] meta = room.meta;
             out.writeInt(meta == null ? 0 : meta.length);
             if (meta != null && meta.length > 0) {
                 out.write(meta);
             }
-            writeString(out, room.networkName);
-            writeString(out, room.networkSecret);
+            RoomCodec.writeString(out, room.networkName);
+            RoomCodec.writeString(out, room.networkSecret);
             return new CoreResponse(0, req.requestId(), req.kind(), baos.toByteArray());
         }
 
@@ -454,8 +455,8 @@ public final class CoreRooms {
          */
         private CoreResponse send(CoreRequest req) throws Exception {
             DataInputStream in = new DataInputStream(new ByteArrayInputStream(req.payload()));
-            String roomIdInput = readString(in);
-            String channel = readString(in);
+            String roomIdInput = RoomCodec.readString(in);
+            String channel = RoomCodec.readString(in);
             int messageLen = in.readInt();
             if (roomIdInput.isBlank() || channel.isBlank() || messageLen < 0) {
                 return error(req, STATUS_INVALID_PAYLOAD, "invalid payload");
@@ -482,7 +483,8 @@ public final class CoreRooms {
                 remotes = new ArrayList<>(room.members.values());
             }
 
-            server.sendEventToMany(remotes, "room:message", payloadRoomMessage(roomId, fromId, channel, message));
+            server.sendEventToMany(remotes, "room:message",
+                    RoomCodec.payloadRoomMessage(roomId, fromId, channel, message));
             return new CoreResponse(0, req.requestId(), req.kind(), new byte[0]);
         }
 
@@ -498,7 +500,7 @@ public final class CoreRooms {
          */
         private CoreResponse setMeta(CoreRequest req) throws Exception {
             DataInputStream in = new DataInputStream(new ByteArrayInputStream(req.payload()));
-            String roomIdInput = readString(in);
+            String roomIdInput = RoomCodec.readString(in);
             int len = in.readInt();
             if (roomIdInput.isBlank() || len < 0) {
                 return error(req, STATUS_INVALID_PAYLOAD, "invalid payload");
@@ -525,7 +527,7 @@ public final class CoreRooms {
                 room.meta = meta;
                 remotes = new ArrayList<>(room.members.values());
             }
-            server.sendEventToMany(remotes, "room:meta_changed", payloadRoomMeta(roomId, meta));
+            server.sendEventToMany(remotes, "room:meta_changed", RoomCodec.payloadRoomMeta(roomId, meta));
             return new CoreResponse(0, req.requestId(), req.kind(), new byte[0]);
         }
 
@@ -540,7 +542,7 @@ public final class CoreRooms {
          */
         private CoreResponse destroy(CoreRequest req) throws Exception {
             DataInputStream in = new DataInputStream(new ByteArrayInputStream(req.payload()));
-            String roomIdInput = readString(in);
+            String roomIdInput = RoomCodec.readString(in);
             if (roomIdInput.isBlank()) {
                 return error(req, STATUS_INVALID_PAYLOAD, "missing roomId");
             }
@@ -574,7 +576,7 @@ public final class CoreRooms {
                 }
                 room.members.clear();
             }
-            server.sendEventToMany(remotes, "room:destroyed", payloadRoom(roomId));
+            server.sendEventToMany(remotes, "room:destroyed", RoomCodec.payloadRoom(roomId));
             return new CoreResponse(0, req.requestId(), req.kind(), new byte[0]);
         }
 
@@ -769,147 +771,6 @@ public final class CoreRooms {
             }
         }
 
-        /**
-     * 读取一个长度前缀字符串。
-     *
-     * 格式：长度（2 字节无符号短整型）+ UTF-8 字节；长度为 0 时直接返回空串。
-     *
-     * @param in 输入流，不能为 null
-     * @return 解码后的字符串，永不为 null，长度前缀为 0 时返回空串
-     * @throws Exception 当流读取失败或剩余数据不足声明长度时抛出
-     */
-    private static String readString(DataInputStream in) throws Exception {
-        int len = in.readUnsignedShort();
-        if (len == 0) {
-            return "";
-        }
-        byte[] bytes = new byte[len];
-        in.readFully(bytes);
-        return new String(bytes, StandardCharsets.UTF_8);
-    }
-
-    /**
-     * 写入一个长度前缀字符串。
-     *
-     * 格式：长度（2 字节无符号短整型）+ UTF-8 字节；null 与空串都写成零长度。
-     *
-     * @param out 输出流，不能为 null
-     * @param s 待写入字符串，允许为 null
-     * @throws IllegalArgumentException 当 UTF-8 编码后长度超过 65535 字节时抛出
-     * @throws Exception 当底层流写入失败时抛出
-     */
-    private static void writeString(DataOutputStream out, String s) throws Exception {
-        if (s == null || s.isEmpty()) {
-            out.writeShort(0);
-            return;
-        }
-        byte[] bytes = s.getBytes(StandardCharsets.UTF_8);
-        if (bytes.length > 65535) {
-            throw new IllegalArgumentException("string too long");
-        }
-        out.writeShort(bytes.length);
-        out.write(bytes);
-    }
-
-    /**
-     * 写入成员标识集合。
-     *
-     * 格式：成员数（2 字节无符号短整型）+ 逐个长度前缀字符串；集合的迭代顺序即写入顺序。
-     *
-     * @param out 输出流，不能为 null
-     * @param memberIds 成员标识集合，不能为 null
-     * @throws Exception 当底层流写入失败时抛出
-     */
-    private static void writeMembers(DataOutputStream out, Set<String> memberIds) throws Exception {
-        out.writeShort(memberIds.size());
-        for (String id : memberIds) {
-            writeString(out, id);
-        }
-    }
-
-    /**
-     * 构建房间事件负载。
-     *
-     * @param roomId 房间码，不能为 null
-     * @return 仅含房间码的负载；编码失败时返回空数组而不抛出异常
-     */
-    private static byte[] payloadRoom(String roomId) {
-        try {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            DataOutputStream out = new DataOutputStream(baos);
-            writeString(out, roomId);
-            return baos.toByteArray();
-        } catch (Exception e) {
-            return new byte[0];
-        }
-    }
-
-    /**
-     * 构建房间成员事件负载。
-     *
-     * @param roomId 房间码，不能为 null
-     * @param memberId 成员标识，不能为 null
-     * @return 房间码与成员标识依次写入的负载；编码失败时返回空数组而不抛出异常
-     */
-    private static byte[] payloadRoomMember(String roomId, String memberId) {
-        try {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            DataOutputStream out = new DataOutputStream(baos);
-            writeString(out, roomId);
-            writeString(out, memberId);
-            return baos.toByteArray();
-        } catch (Exception e) {
-            return new byte[0];
-        }
-    }
-
-    /**
-     * 构建房间元数据事件负载。
-     *
-     * @param roomId 房间码，不能为 null
-     * @param meta 元数据，允许为 null，为 null 时只写入长度 0
-     * @return 房间码、元数据长度与元数据依次写入的负载；编码失败时返回空数组而不抛出异常
-     */
-    private static byte[] payloadRoomMeta(String roomId, byte[] meta) {
-        try {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            DataOutputStream out = new DataOutputStream(baos);
-            writeString(out, roomId);
-            out.writeInt(meta == null ? 0 : meta.length);
-            if (meta != null && meta.length > 0) {
-                out.write(meta);
-            }
-            return baos.toByteArray();
-        } catch (Exception e) {
-            return new byte[0];
-        }
-    }
-
-    /**
-     * 构建房间消息事件负载。
-     *
-     * @param roomId 房间码，不能为 null
-     * @param fromId 发送者标识，不能为 null
-     * @param channel 频道名，不能为 null
-     * @param message 消息体，允许为 null，为 null 时只写入长度 0
-     * @return 房间码、发送者、频道、消息长度与消息体依次写入的负载；编码失败时返回空数组而不抛出异常
-     */
-    private static byte[] payloadRoomMessage(String roomId, String fromId, String channel, byte[] message) {
-        try {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            DataOutputStream out = new DataOutputStream(baos);
-            writeString(out, roomId);
-            writeString(out, fromId);
-            writeString(out, channel);
-            out.writeInt(message == null ? 0 : message.length);
-            if (message != null && message.length > 0) {
-                out.write(message);
-            }
-            return baos.toByteArray();
-        } catch (Exception e) {
-            return new byte[0];
-        }
-    }
 }
 
 /**
