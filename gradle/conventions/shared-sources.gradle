@@ -1,0 +1,24 @@
+// shared-sources.gradle —— 共享源码目录（ADR-01 / ADR-13）
+//
+// 背景：Forge 与 NeoForge 都使用 Mojang 官方映射，但**无法共享字节码**
+// （net.minecraftforge.* 与 net.neoforged.* 是两套包）。因此共享代码的做法是：
+// 把源码放在 ender_common 下，作为**物理源码目录**被两端各自的 sourceSets 引用，
+// 各自用自己加载器的依赖与映射编译一次。
+//
+// 关键约束（ADR-13）：ender_common 中的代码**不得** import 任何加载器包，
+// 只能使用 vanilla Mojmap 类型 + ender_core。守卫 check-loader-leak.ps1 会拦截违规。
+//
+// 注意：ender_common **不是** Gradle 子项目（不在 settings.gradle 里 include），
+// 只是一个源码目录。不要把它改造成子项目——那会引入跨加载器的类型依赖，
+// 正好是 ADR-01 要避免的东西。
+
+ext.enderSharedJavaDirs = [
+        rootProject.file('ender_common/src/main/java'),
+]
+
+// 把共享源码挂到某个工程的主 source set 上。
+// NeoGradle / ForgeGradle 的 mods { sourceSet(sourceSets.main) } 会自动带上这些目录，
+// 因此 jar 与运行时都会包含它们，无需额外配置。
+ext.applyEnderSharedSources = { project ->
+    project.sourceSets.main.java.srcDir project.rootProject.file('ender_common/src/main/java')
+}

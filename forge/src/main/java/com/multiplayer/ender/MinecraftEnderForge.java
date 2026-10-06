@@ -64,6 +64,11 @@ public class MinecraftEnderForge {
 
         ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, ConfigForge.SPEC, "ender-common.toml");
         ModLoadingContext.get().registerConfig(ModConfig.Type.CLIENT, ConfigForge.CLIENT_SPEC, "ender.toml");
+
+        // 注入配置实现供共享层使用（ADR-01 适配注入）：共享代码不得引用 ForgeConfigSpec，
+        // 只能通过 PlatformConfig 接口读写设置。
+        com.multiplayer.ender.client.PlatformConfigHolder.install(
+                new com.multiplayer.ender.client.ForgePlatformConfig());
     }
 
     /**

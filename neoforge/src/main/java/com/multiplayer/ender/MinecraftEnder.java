@@ -57,6 +57,11 @@ public class MinecraftEnder {
 
         modContainer.registerConfig(ModConfig.Type.COMMON, Config.SPEC, "ender-common.toml");
         modContainer.registerConfig(ModConfig.Type.CLIENT, Config.CLIENT_SPEC, "ender.toml");
+
+        // 注入配置实现供共享层使用（ADR-01 适配注入）：共享代码不得引用 ModConfigSpec，
+        // 只能通过 PlatformConfig 接口读写设置。
+        com.multiplayer.ender.client.PlatformConfigHolder.install(
+                new com.multiplayer.ender.client.NeoForgePlatformConfig());
     }
 
     /**

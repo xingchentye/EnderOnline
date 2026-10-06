@@ -50,16 +50,20 @@ neoForge {
 
 sourceSets.main.resources { srcDir 'src/generated/resources' }
 
+// 共享源码目录（ADR-01 / ADR-13）：见 gradle/conventions/shared-sources.gradle
+apply from: rootProject.file('gradle/conventions/shared-sources.gradle')
+applyEnderSharedSources(project)
+
 configurations {
     runtimeClasspath.extendsFrom localRuntime
 }
 
 dependencies {
     implementation project(':ender_core')
-    implementation "org.java-websocket:Java-WebSocket:1.5.4"
-    implementation "org.apache.commons:commons-compress:1.26.0"
-    localRuntime "org.java-websocket:Java-WebSocket:1.5.4"
-    localRuntime "org.apache.commons:commons-compress:1.26.0"
+    implementation libs.java.websocket
+    implementation libs.commons.compress
+    localRuntime libs.java.websocket
+    localRuntime libs.commons.compress
 }
 
 tasks.named('jar') {
