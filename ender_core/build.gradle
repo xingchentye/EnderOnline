@@ -1,12 +1,57 @@
-dependencies {
-    implementation 'org.apache.commons:commons-compress:1.26.0'
-    implementation 'org.slf4j:slf4j-api:2.0.9'
-    implementation 'com.google.code.gson:gson:2.10.1'
-    implementation 'org.java-websocket:Java-WebSocket:1.5.4'
+// ender_core —— 纯 Java 库，零 Minecraft 依赖（ADR-04）
+//
+// 本模块的特殊之处：它是整个仓库里唯一可以**脱离游戏环境**构建与测试的部分，
+// 因此这里显式声明 java-library 与 repositories，
+// 使得 `gradle -p ender_core test` 能独立运行——不必配置 forge/neoforge 子项目
+// （ForgeGradle 在配置期会解析 Minecraft 依赖，某些网络/平台上会失败，不应连带阻塞单元测试）。
+//
+// 父项目的 subprojects {} 也会应用 java-library，此处重复应用是幂等的。
+//
+// 依赖坐标与版本只允许来自 gradle/libs.versions.toml，不要在本文件硬编码版本号
+// （守卫 check-dependency-single-source.ps1 会拦截）。
 
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
+plugins {
+    id 'java-library'
 }
 
-test {
+repositories {
+    // 镜像优先，官方源回落（与 settings.gradle / 根 build.gradle 的策略一致）
+    maven { name = 'AliyunPublic'; url = 'https://maven.aliyun.com/repository/public/' }
+    mavenCentral()
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+dependencies {
+    implementation libs.java.websocket
+    implementation libs.commons.compress
+    implementation libs.gson
+    implementation libs.slf4j.api
+
+    testImplementation libs.junit.jupiter
+    testRuntimeOnly libs.junit.platform.launcher
+    // 让测试输出有实际的日志实现，便于定位失败
+    testRuntimeOnly libs.slf4j.simple
+}
+
+tasks.withType(JavaCompile).configureEach {
+    // 源码含中文注释与字面量，必须显式 UTF-8（10-code-style.md §2.5）
+    options.encoding = 'UTF-8'
+    options.release = 21
+}
+
+tasks.withType(Test).configureEach {
     useJUnitPlatform()
+    // 测试必须确定性：不依赖网络、不依赖真实时钟、不弹窗口
+    systemProperty 'java.awt.headless', 'true'
+    testLogging {
+        events 'failed'
+        exceptionFormat 'full'
+        showStandardStreams = false
+    }
+    maxParallelForks = 2
 }

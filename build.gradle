@@ -12,13 +12,25 @@ group = mod_group_id
 allprojects {
     repositories {
         mavenLocal()
+        // ---- 镜像优先（中国大陆网络）----
+        // public = central + 常用第三方聚合；google = Android/Google 构件。
+        // 镜像未收录的构件会自动回落到下方官方源。
+        maven {
+            name = 'AliyunPublic'
+            url = 'https://maven.aliyun.com/repository/public/'
+        }
+        maven {
+            name = 'AliyunGoogle'
+            url = 'https://maven.aliyun.com/repository/google/'
+        }
+        // ---- 官方源（回落）----
         maven {
             name = 'MinecraftForge'
             url = 'https://maven.minecraftforge.net/'
         }
         maven {
-            name = 'FabricMC'
-            url = 'https://maven.fabricmc.net/'
+            name = 'NeoForged'
+            url = 'https://maven.neoforged.net/releases/'
         }
         mavenCentral()
     }

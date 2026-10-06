@@ -1,13 +1,24 @@
 pluginManagement {
     repositories {
+        // ---- 镜像优先（中国大陆网络）----
+        // 顺序策略：镜像在前、官方在后。镜像未收录的构件会自动回落到官方源，因此两种网络环境都能构建。
+        maven {
+            name = 'AliyunGradlePlugin'
+            url = 'https://maven.aliyun.com/repository/gradle-plugin/'
+        }
+        maven {
+            name = 'AliyunPublic'
+            url = 'https://maven.aliyun.com/repository/public/'
+        }
+        // ---- 官方源（回落）----
         gradlePluginPortal()
         maven {
             name = 'MinecraftForge'
             url = 'https://maven.minecraftforge.net/'
         }
         maven {
-            name = 'FabricMC'
-            url = 'https://maven.fabricmc.net/'
+            name = 'NeoForged'
+            url = 'https://maven.neoforged.net/releases/'
         }
     }
 }
@@ -17,4 +28,8 @@ plugins {
 }
 
 rootProject.name = "EnderOnline"
-include("neoforge", "forge", "fabric", "ender_core")
+
+// Fabric 支持已于 v3.1 终止（见 claude_docs/00-decisions-and-open-questions.md 的 ADR-00）。
+// 最后一个支持 Fabric 的版本见 git tag fabric-eol-*。
+// 不要重新加入 "fabric"：那会重新引入 3 份重复源码与映射分裂（ADR-14：终止按删除执行）。
+include("neoforge", "forge", "ender_core")

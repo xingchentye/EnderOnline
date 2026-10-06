@@ -1,12 +1,85 @@
 name: Build
 
+# 三段式流水线，顺序有讲究：
+#   guards（秒级，先失败最省时间）→ test（分钟级，纯 Java，不需网络与游戏环境）→ build（最贵，两端矩阵）
+#
+# 为什么 test 与 build 分开：
+#   forge/neoforge 的构建在**配置阶段**就要解析 Minecraft 依赖，在部分网络/平台上会失败。
+#   把它与「与 Minecraft 无关的 ender_core 单元测试」解耦后，
+#   即使加载器构建因网络问题失败，测试结果依然可见、依然能拦住回归。
+#
+# 为什么用 scripts/run-core-tests.ps1 而不是 ./gradlew :ender_core:test：
+#   同上的解耦目的；该脚本只需要 JDK 与 Gradle 缓存里的 JUnit jar。
+
 on: [push, pull_request]
 
 jobs:
+  guards:
+    name: 质量守卫（棘轮）
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 运行全部守卫
+        shell: pwsh
+        run: ./scripts/guards/run-all.ps1
+
+  test:
+    name: ender_core 单元测试
+    needs: guards
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: 预取 JUnit 到 Gradle 缓存
+        shell: pwsh
+        run: |
+          # run-core-tests.ps1 从 Gradle 缓存取 JUnit jar；这里用一个最小临时项目把依赖拉下来，
+          # 避免触发 forge/neoforge 子项目的配置阶段。
+          $tmp = Join-Path $env:RUNNER_TEMP 'junit-seed'
+          New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+          New-Item -ItemType Directory -Path (Join-Path $tmp 'src/test/java') -Force | Out-Null
+          @'
+          plugins { id 'java' }
+          repositories { mavenCentral() }
+          dependencies {
+              testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
+              testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+          }
+          '@ | Set-Content -Encoding UTF8 (Join-Path $tmp 'build.gradle')
+          'rootProject.name = "junit-seed"' | Set-Content -Encoding UTF8 (Join-Path $tmp 'settings.gradle')
+          Push-Location $tmp
+          try {
+            gradle --no-daemon --quiet dependencies --configuration testRuntimeClasspath
+          } finally {
+            Pop-Location
+          }
+
+      - name: 运行 ender_core 测试
+        shell: pwsh
+        run: ./scripts/run-core-tests.ps1
+
   build:
+    name: 构建 ${{ matrix.loader }}
+    needs: test
+    runs-on: ubuntu-latest
     permissions:
       contents: write
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Fabric 已于 v3.1 终止支持（见 claude_docs/00-decisions-and-open-questions.md 的 ADR-00）
+        loader: [forge, neoforge]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -31,21 +104,43 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
-      - name: Build with Gradle
-        run: ./gradlew build
+      - name: Build ${{ matrix.loader }}
+        run: ./gradlew :${{ matrix.loader }}:build
 
       - name: Prepare artifacts
         run: |
           mkdir -p dist
           MOD_VERSION=${{ steps.vars.outputs.mod_version }}
           BRANCH_NAME=${GITHUB_REF_NAME##*/}
-          FABRIC_JAR=$(ls fabric/build/libs/*.jar | grep -v '\-sources\.jar' | head -n 1)
-          cp "$FABRIC_JAR" "dist/EnderOnline-v${MOD_VERSION}-${BRANCH_NAME}-fabric.jar"
-          cp forge/build/libs/*-forge.jar "dist/EnderOnline-v${MOD_VERSION}-${BRANCH_NAME}-forge.jar"
-          cp neoforge/build/libs/*-neoforge.jar "dist/EnderOnline-v${MOD_VERSION}-${BRANCH_NAME}-neoforge.jar"
+          LOADER=${{ matrix.loader }}
+          SRC=$(ls $LOADER/build/libs/*.jar | grep -v '\-sources\.jar' | head -n 1)
+          cp "$SRC" "dist/EnderOnline-v${MOD_VERSION}-${BRANCH_NAME}-${LOADER}.jar"
+          ls -l dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ender-online-${{ matrix.loader }}
+          path: dist/*.jar
+
+  release:
+    name: 发布
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 下载全部产物
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
 
       - name: Create or update GitHub Release
-        if: github.event_name == 'push'
         uses: ncipollo/release-action@v1
         with:
           tag: ${{ github.ref_name }}
