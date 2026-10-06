@@ -20,7 +20,6 @@
 - [本地开发与构建](#本地开发与构建)
 - [测试与代码质量](#测试与代码质量)
 - [配置说明](#配置说明)
-- [使用说明](#使用说明)
 - [平台支持](#平台支持)
 - [项目结构](#项目结构)
 - [贡献建议](#贡献建议)
@@ -38,16 +37,6 @@
 | **游戏内管理** | 房主可在仪表盘中管理白名单、黑名单、禁言列表与访客权限 |
 | **后端自动托管** | Windows 端自动下载并启停 P2P 后端进程 |
 | **跨平台** | Windows 桌面与 Android（PojavLauncher / Amethyst） |
-
-> ### 关于 Fabric 支持
->
-> 本项目**只支持 Forge 与 NeoForge，不再支持 Fabric**。
->
-> Fabric 需要独立的 Yarn 映射与多处 Mixin 注入，导致同一份 UI 与业务逻辑必须在三个模块各维护一份，
-> 并已出现实际的行为漂移；而 Forge 与 NeoForge 都提供官方的界面事件钩子，不再需要 Mixin。
->
-> 最后一个支持 Fabric 的版本见 git tag `fabric-eol-v0.1.2`。该 tag 下的产物仍可正常使用，
-> 但不再接收更新与修复。Fabric 用户迁移到 Forge / NeoForge 版本时，存档与世界数据无需转换。
 
 ---
 
@@ -153,51 +142,36 @@ neoforge/build/libs/ender-online-<版本>-neoforge.jar
 ./gradlew clean build
 ```
 
-Windows 上若报缺少 LWJGL native 构件，请确认本地 Maven 仓库或镜像源可访问；
-项目在 `settings.gradle` 中配置了镜像源并保留官方源作为回落。
+Windows 上若报缺少 LWJGL native 构件，请确认本地 Maven 仓库或镜像源可访问。
 
 ---
 
 ## 测试与代码质量
 
-### 单元测试
-
-`ender_core` 的单元测试不依赖 Minecraft，覆盖协议编解码、端口分配、房间码、
-重连退避、在途请求表与房间状态存储：
+本项目在提交与合并前要求：
 
 ```bash
+# 编译校验：比完整 build 快，适合改动过程中反复执行
+./gradlew :forge:compileJava :neoforge:compileJava
+
+# 单元测试
 ./gradlew :ender_core:test
+
+# 完整构建
+./gradlew build
 ```
 
-> 若加载器子项目在配置阶段失败导致整体构建无法启动，可绕过 Gradle 直接运行纯 Java 测试，
-> 详见仓库内 `scripts/run-core-tests.ps1`（仅需 JDK 与 Gradle 缓存中的 JUnit）。
+单元测试位于 `ender_core`，不依赖 Minecraft 运行环境，覆盖协议编解码、端口分配、房间码、
+重连退避、在途请求表、房间状态存储与玩家名单等纯逻辑。
 
-### 质量守卫
+CI 会在每次 push 与 Pull Request 上依次执行编译、单元测试与两端构建，任一环节失败即阻断合并。
 
-仓库内置一组「只降不升」的守卫脚本（棘轮基线），覆盖文件体积、注释规范、硬编码文案、
-裸线程、静态可变状态、反射调用、加载器渗漏等约束：
+**代码质量约定**
 
-```powershell
-# 运行全部守卫
-./scripts/guards/run-all.ps1
-
-# 只运行其中一项
-./scripts/guards/run-all.ps1 -Only format
-
-# 改动使指标下降后，下调基线（需人工确认后再提交）
-./scripts/guards/run-all.ps1 -UpdateBaseline
-```
-
-CI（`.github/workflows/build.yml`）会在每次 push / PR 时依次执行：
-**质量守卫 → 单元测试 → 双端构建矩阵**，任一环节失败即阻断。
-
-### 提交前自检清单
-
-- [ ] `./gradlew :forge:compileJava :neoforge:compileJava` 通过
-- [ ] `./gradlew :ender_core:test` 通过
-- [ ] `./scripts/guards/run-all.ps1` 无回归
-- [ ] 新增/修改的公开方法带中文 Javadoc
-- [ ] 新增的 UI 文案走语言文件键，未硬编码
+- 使用官方 Mojang 映射，不改为 Yarn 或 MCP。
+- 新增逻辑应配有单元测试；测试放在对应模块的 `src/test/java` 下。
+- `ender_core` 不得引用 Minecraft 或任何加载器 API。
+- 注释用中文，字符串用英文；UI 文案一律走语言文件的键，不在代码里硬编码。
 
 ---
 
@@ -233,36 +207,6 @@ CI（`.github/workflows/build.yml`）会在每次 push / PR 时依次执行：
 
 - 首次作为房主使用时，模组会下载并启动 EasyTier 后端进程。
 - 特殊网络环境下，可通过 `externalEnderPath` 指定自备的后端可执行文件。
-- 阶段划分与后端进程信息见本文档末尾的[项目结构](#项目结构)。
-
----
-
-## 使用说明
-
-### 创建房间（房主）
-
-1. 进入单人存档，按 `Esc` 打开游戏菜单。
-2. 选择「对局域网开放」，在右上角把「末影联机」开关打开。
-3. 点击「开放到局域网」，等待后端初始化并接入 P2P 网络。
-4. 复制生成的**房间码**发送给好友。
-
-### 加入房间（好友）
-
-1. 进入「多人游戏」界面。
-2. 点击右上角的末影联机入口。
-3. 选择「加入房间」，粘贴或输入房间码。
-4. 点击连接，等待进入世界。
-
-### 房间管理（房主）
-
-在仪表盘的房间管理面板中，房主可以：
-
-- 设置房间名称与备注（备注会作为局域网 MOTD 广播）
-- 维护白名单、黑名单与禁言列表
-- 设置访客权限（可交互 / 仅观战 / 仅聊天 / 禁止进入）
-- 调整游戏规则（作弊、PVP、生物生成、天气与时间锁定等）
-- 设置重生点与世界边界
-- 导入 / 导出房间状态
 
 ---
 
@@ -272,7 +216,7 @@ CI（`.github/workflows/build.yml`）会在每次 push / PR 时依次执行：
 |---|---|---|
 | **Windows** | ✅ 完整支持（自动下载并托管后端） | ✅ 完整支持 |
 | **Linux / macOS** | ✅ 支持（需自备后端或可下载） | ✅ 完整支持 |
-| **Android**（PojavLauncher / Amethyst） | ⚠️ 需设备上已运行 EasyTier（官方 APK 或 Magisk 模块）。未检测到时创建入口会置灰并说明原因 | ✅ 完整支持，无需额外安装 |
+| **Android**（PojavLauncher / Amethyst） | ⚠️ 需设备上已具备 EasyTier | ✅ 完整支持 |
 
 Android 端界面按触控优化：命中区不小于 48vp，布局按视口单位自适应。
 
@@ -287,10 +231,7 @@ EnderOnline/
 ├── ender_common/    共享源码目录（UI 与业务逻辑，被两端各自编译一次）
 ├── forge/           Forge 适配层（入口点、事件、渲染桥、配置）
 ├── neoforge/        NeoForge 适配层（同上）
-├── gradle/          版本目录与共享约定
-│   ├── libs.versions.toml      依赖与版本的唯一来源
-│   └── conventions/            共享源码集接线等约定脚本
-└── (本地开发工具)  质量守卫与测试运行器，见「测试与代码质量」
+└── gradle/          版本目录与共享约定（依赖版本集中管理）
 ```
 
 ### 关于共享源码目录
@@ -327,7 +268,7 @@ forge / neoforge  ──▶  ender_common  ──▶  ender_core
 2. 完成改动后，按[提交前自检清单](#提交前自检清单)在本地验证。
 3. 向 `1.21` 分支发起 Pull Request，并在描述中说明：
    - 改动的目的与范围
-   - 验证方式（执行的命令与结果）
+   - 验证方式：执行过的命令与结果
    - 若涉及行为变更，说明影响面与回归风险
 
 ### 提交信息规范
