@@ -27,6 +27,7 @@ import org.slf4j.LoggerFactory;
 
 import com.multiplayer.ender.logic.DownloadManager;
 import com.multiplayer.ender.logic.PlatformHelper;
+import com.multiplayer.ender.logic.PortAllocator;
 import com.multiplayer.ender.logic.VersionChecker;
 import com.multiplayer.ender.network.NetworkClient;
 import com.multiplayer.ender.network.EnderApiClient;
@@ -336,7 +337,7 @@ public class StartupScreen extends EnderBaseScreen {
 
         updateStatus("初始化完成", 1.0);
         
-        int port = PlatformHelper.findAvailablePort();
+        int port = PortAllocator.findAvailablePort();
         if (port == -1) {
             throw new RuntimeException("无法找到可用端口");
         }

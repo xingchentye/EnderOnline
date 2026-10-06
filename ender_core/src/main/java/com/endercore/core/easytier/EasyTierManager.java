@@ -20,6 +20,7 @@ import org.slf4j.LoggerFactory;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.multiplayer.ender.logic.PlatformHelper;
+import com.multiplayer.ender.logic.PortAllocator;
 
 /**
  * EasyTier 进程与安装的管理者。
@@ -380,9 +381,9 @@ public class EasyTierManager {
         }
 
         
-        if (config.rpcPort > 0 && !isPortAvailable(config.rpcPort)) {
+        if (config.rpcPort > 0 && !PortAllocator.isPortAvailable(config.rpcPort)) {
             LOGGER.warn("RPC Port {} is in use, finding a new one...", config.rpcPort);
-            int newPort = findAvailablePort();
+            int newPort = PortAllocator.findAvailablePort();
             if (newPort > 0) {
                 config.rpcPort = newPort;
                 LOGGER.info("Using new RPC Port: {}", newPort);
@@ -399,40 +400,6 @@ public class EasyTierManager {
         }
         
         runner.start(args.toArray(new String[0]), env);
-    }
-
-    /**
-     * 查找一个建议可用的本地端口。
-     *
-     * FIXME(P3, 2026-10-06): 与 PlatformHelper.findAvailablePort 同源缺陷——
-     * 绑定端口 0 后立即关闭，返回的是「当前空闲」而非「已保留」的端口，
-     * 到真正启动进程之间存在被抢占的窗口。
-     *
-     * @return 端口号，取值范围 1 到 65535；分配失败时返回 -1
-     */
-    private int findAvailablePort() {
-        try (java.net.ServerSocket socket = new java.net.ServerSocket(0)) {
-            return socket.getLocalPort();
-        } catch (IOException e) {
-            LOGGER.error("Failed to find available port", e);
-            return -1;
-        }
-    }
-
-    /**
-     * 探测指定端口当前是否可绑定。
-     *
-     * 实现方式是尝试绑定后立即释放，同样存在 TOCTOU 窗口：返回 true 只说明「此刻」可绑定。
-     *
-     * @param port 端口号，取值 1 到 65535，超出范围时返回 false
-     * @return 可绑定返回 true；端口被占用、无权限或取值非法返回 false
-     */
-    private boolean isPortAvailable(int port) {
-        try (java.net.ServerSocket socket = new java.net.ServerSocket(port)) {
-            return true;
-        } catch (IOException e) {
-            return false;
-        }
     }
 
     /**

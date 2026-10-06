@@ -1,7 +1,9 @@
 /*
  * 本文件属于 EnderOnline 核心逻辑层。
  *
- * 职责：平台判定（操作系统、CPU 架构）与平台相关的文件名、端口工具。
+ * 职责：平台判定（操作系统、CPU 架构）与平台相关的文件名。
+ *
+ * 端口工具已全部迁至 {@link PortAllocator}：三处重复实现归并为唯一入口后，本类不再持有端口逻辑。
  */
 package com.multiplayer.ender.logic;
 
@@ -169,23 +171,4 @@ public class PlatformHelper {
         return getExecutableName("2.4.5");
     }
 
-    /**
-     * 查找一个建议可用的本地端口。
-     *
-     * 实现方式是绑定端口 0 让内核分配、读取端口号、随即关闭监听。
-     * 返回的是「当前空闲」的端口，而不是「已为本进程保留」的端口。
-     *
-     * FIXME(P3, 2026-10-06): 存在 TOCTOU 竞态——从本方法返回端口到调用方真正
-     * 绑定该端口之间存在时间窗口，其他进程可能抢先占用，导致后续绑定失败。
-     * 正确做法是由调用方持有监听套接字，或改为传入已绑定的 Socket 而非端口号。
-     *
-     * @return 端口号，取值范围 1 到 65535；分配失败（如无可用端口或被安全策略拒绝）时返回 -1
-     */
-    public static int findAvailablePort() {
-        try (java.net.ServerSocket socket = new java.net.ServerSocket(0)) {
-            return socket.getLocalPort();
-        } catch (java.io.IOException e) {
-            return -1;
-        }
-    }
 }

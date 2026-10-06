@@ -41,6 +41,7 @@ import java.util.function.Consumer;
 
 
 import com.multiplayer.ender.logic.LanDiscovery;
+import com.multiplayer.ender.logic.PortAllocator;
 
 /**
  * 房间联机业务的门面（上帝类）。
@@ -1035,7 +1036,7 @@ public class EnderApiClient {
         stopScaffoldingServer();
         resetProfiles();
         hostedMcPort = mcPort;
-        scaffoldingPort = pickAvailablePort(DEFAULT_SCAFFOLDING_PORT);
+        scaffoldingPort = PortAllocator.pickAvailablePort(DEFAULT_SCAFFOLDING_PORT, DEFAULT_SCAFFOLDING_PORT);
         Profile hostProfile = new Profile(LOCAL_MACHINE_ID, hostName, VENDOR, "HOST");
         profiles.add(hostProfile);
         profileLastSeen.put(LOCAL_MACHINE_ID, System.currentTimeMillis());
@@ -1621,55 +1622,6 @@ public class EnderApiClient {
     private static void resetProfiles() {
         profiles.clear();
         profileLastSeen.clear();
-    }
-
-    /**
-     * 选择 Scaffolding 服务端端口。
-     *
-     * 优先复用首选端口，被占用时退化为随机端口。
-     *
-     * FIXME(P3, 2026-10-06): 存在 TOCTOU 竞态——探测到「可绑定」与实际绑定之间
-     * 存在时间窗口，高并发启动或端口竞争激烈时仍可能绑定失败。
-     *
-     * @param preferred 首选端口，取值 1 到 65535
-     * @return 端口号，永不为非正值：优先返回 preferred，被占用时返回随机分配的空闲端口
-     */
-    private static int pickAvailablePort(int preferred) {
-        if (isPortAvailable(preferred)) {
-            return preferred;
-        }
-        return findAvailablePort();
-    }
-
-    /**
-     * 分配一个空闲端口。
-     *
-     * 绑定端口 0 让系统分配后立即释放。
-     *
-     * FIXME(P3, 2026-10-06): 返回的是「曾空闲」而非「已保留」的端口，存在 TOCTOU 竞态。
-     *
-     * @return 端口号；分配失败等异常情况下返回兜底值 DEFAULT_SCAFFOLDING_PORT
-     */
-    private static int findAvailablePort() {
-        try (java.net.ServerSocket socket = new java.net.ServerSocket(0)) {
-            return socket.getLocalPort();
-        } catch (Exception e) {
-            return DEFAULT_SCAFFOLDING_PORT;
-        }
-    }
-
-    /**
-     * 探测指定端口当前是否可绑定。
-     *
-     * @param port 端口号，取值 1 到 65535
-     * @return 可绑定返回 true；被占用、无权限或取值非法返回 false
-     */
-    private static boolean isPortAvailable(int port) {
-        try (java.net.ServerSocket socket = new java.net.ServerSocket(port)) {
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
     }
 
     /**
