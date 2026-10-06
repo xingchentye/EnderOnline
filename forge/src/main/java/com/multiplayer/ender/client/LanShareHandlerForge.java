@@ -7,16 +7,6 @@
  */
 package com.multiplayer.ender.client;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
-
-import com.google.gson.Gson;
-import com.google.gson.JsonObject;
 import com.multiplayer.ender.client.gui.StartupScreen;
 import com.multiplayer.ender.network.EnderApiClient;
 
@@ -55,26 +45,6 @@ import net.minecraftforge.fml.common.Mod;
 public class LanShareHandlerForge {
     /** 末影联机托管开关，默认 false；仅表达界面意图，点击开始后才真正生效。 */
     private static boolean enableEnder = false;
-
-    /**
-     * JSON 解析器。
-     *
-     * 当前类内已无使用点，属于待清理的遗留字段。
-     */
-    private static final Gson GSON = new Gson();
-
-    /**
-     * 房间状态轮询线程池。
-     *
-     * 单线程守护线程，进程结束即终止；当前类内已无提交点，属于历史遗留的空执行器。
-     *
-     * TODO(P4, 2026-09-30): 确认无外部引用后删除本字段与不再使用的 GSON 字段及相关 import。
-     */
-    private static final ScheduledExecutorService ROOM_POLL_EXECUTOR = Executors.newSingleThreadScheduledExecutor(r -> {
-        Thread thread = new Thread(r, "Ender-Room-Poll");
-        thread.setDaemon(true);
-        return thread;
-    });
 
     /**
      * 屏幕初始化完成后的回调。

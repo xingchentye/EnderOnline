@@ -7,6 +7,7 @@
  */
 package com.multiplayer.ender.client.gui;
 
+import com.endercore.core.comm.EnderExecutors;
 import com.endercore.core.comm.EnderLifecycle;
 
 import com.multiplayer.ender.client.PlatformConfigHolder;
@@ -14,7 +15,6 @@ import com.multiplayer.ender.client.PlatformConfigHolder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -54,7 +54,7 @@ import net.minecraft.network.chat.Component;
  *    因此它恒为 false，实际不起作用。
  * 3. 取消或界面被移除时，只要本次是全新启动且未置 keepProcessAlive，就会另起线程停止后端进程。
  * 4. subStatusText 没有任何写入点，因此渲染中的次要状态行永远不会显示。
- * 5. STARTUP_EXECUTOR 是静态单线程守护执行器，供延时与端口轮询复用，生命周期与客户端进程一致。
+ * 5. STARTUP_EXECUTOR 复用 EnderExecutors 的共享调度器，其生命周期由 EnderLifecycle 统一关闭。
  *
  * FIXME(P2, 2026-12-31): 启动线程与渲染线程共享状态字段而未同步，进度展示的可见性无保证；
  * 应改为经 Minecraft#execute 回主线程写入状态。
@@ -69,14 +69,11 @@ public class StartupScreen extends EnderBaseScreen {
     /**
      * 启动任务调度执行器。
      *
-     * 静态单线程守护执行器：单线程保证延时与轮询任务串行，守护属性保证不会阻止进程退出。
-     * 生命周期与客户端进程一致，不随本界面关闭而终止。
+     * 复用 EnderExecutors 的共享单线程调度器：它与网络重连退避等定时任务同池，虽然会互相排队，
+     * 但都是毫秒级短任务，且省掉了本类自己持有线程的生命周期问题。
+     * daemon 属性由共享池保证，不随本界面关闭而终止，随客户端进程退出。
      */
-    private static final ScheduledExecutorService STARTUP_EXECUTOR = Executors.newSingleThreadScheduledExecutor(r -> {
-        Thread thread = new Thread(r, "Ender-Startup");
-        thread.setDaemon(true);
-        return thread;
-    });
+    private static final ScheduledExecutorService STARTUP_EXECUTOR = EnderExecutors.scheduled();
 
     /** 主状态文本，初值「初始化中...」；由启动线程写入、渲染线程读取。 */
     private String statusText = "初始化中...";

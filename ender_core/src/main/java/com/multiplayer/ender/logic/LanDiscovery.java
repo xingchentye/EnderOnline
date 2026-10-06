@@ -5,6 +5,8 @@
  */
 package com.multiplayer.ender.logic;
 
+import com.endercore.core.comm.EnderExecutors;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,8 +33,8 @@ import java.util.concurrent.TimeUnit;
  * 线程安全性：broadcasterExecutor 是本类的静态可变态，start / stop 均声明为 synchronized，
  * 因此状态读写互斥。调度任务本身运行在独立的守护线程 "Ender-Lan-Broadcaster" 上，
  * 与调用线程并发访问静态字段，必须继续依赖 synchronized 而不是裸读写。
- *
- * @since 1.0
+ * 该线程由 EnderExecutors.daemonFactory 创建，保证命名与 daemon 属性统一，
+ * 但其生命周期仍归本类：由 stopBroadcaster 关闭。
  */
 public class LanDiscovery {
 
@@ -67,11 +69,8 @@ public class LanDiscovery {
     public static synchronized void startBroadcaster(int port, String motd) {
         stopBroadcaster();
         
-        broadcasterExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "Ender-Lan-Broadcaster");
-            t.setDaemon(true);
-            return t;
-        });
+        broadcasterExecutor = Executors.newSingleThreadScheduledExecutor(
+                EnderExecutors.daemonFactory("Ender-Lan-Broadcaster"));
 
         broadcasterExecutor.scheduleAtFixedRate(() -> {
             try {

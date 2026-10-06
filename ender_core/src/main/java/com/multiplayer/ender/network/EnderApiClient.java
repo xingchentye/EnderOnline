@@ -8,6 +8,7 @@
 package com.multiplayer.ender.network;
 
 import com.endercore.core.comm.CoreComm;
+import com.endercore.core.comm.EnderExecutors;
 import com.endercore.core.comm.client.CoreWebSocketClient;
 import com.endercore.core.comm.config.CoreWebSocketConfig;
 import com.endercore.core.comm.protocol.CoreResponse;
@@ -1048,11 +1049,8 @@ public class EnderApiClient {
         server.start();
         server.awaitStarted(Duration.ofSeconds(3));
         scaffoldingServer = server;
-        profileScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "Ender-Scaffolding-Profiles");
-            t.setDaemon(true);
-            return t;
-        });
+        profileScheduler = Executors.newSingleThreadScheduledExecutor(
+                EnderExecutors.daemonFactory("Ender-Scaffolding-Profiles"));
         profileScheduler.scheduleWithFixedDelay(EnderApiClient::pruneGuestProfiles, 5, 5, TimeUnit.SECONDS);
         return scaffoldingPort;
     }
@@ -1090,11 +1088,8 @@ public class EnderApiClient {
      */
     private static void startScaffoldingClient() {
         stopScaffoldingClient();
-        scaffoldingClientScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "Ender-Scaffolding-Client");
-            t.setDaemon(true);
-            return t;
-        });
+        scaffoldingClientScheduler = Executors.newSingleThreadScheduledExecutor(
+                EnderExecutors.daemonFactory("Ender-Scaffolding-Client"));
         scaffoldingClientScheduler.scheduleWithFixedDelay(EnderApiClient::pollScaffoldingServer, 0, 5, TimeUnit.SECONDS);
     }
 

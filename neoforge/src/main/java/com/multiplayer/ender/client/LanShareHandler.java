@@ -7,16 +7,6 @@
  */
 package com.multiplayer.ender.client;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
-
-import com.google.gson.Gson;
-import com.google.gson.JsonObject;
 import com.multiplayer.ender.client.gui.StartupScreen;
 import com.multiplayer.ender.network.EnderApiClient;
 
@@ -44,10 +34,8 @@ import net.neoforged.neoforge.client.event.ScreenEvent;
  * 3. {@code enableEnder} 是静态开关，跨屏幕实例保留上次选择；这是有意的（玩家通常连续多次开房）。
  * 4. 访客权限由当前存档的默认游戏模式推导：旁观者 → 仅观战，冒险 → 仅聊天（当前分支为空，等同可交互）。
  *
- * 线程安全性：静态字段只在客户端主线程读写；{@code ROOM_POLL_EXECUTOR} 目前未被使用，
- * 保留为后续异步轮询房间状态的调度器（守护线程，随进程退出）。
+ * 线程安全性：静态字段只在客户端主线程读写，不存在跨线程访问。
  *
- * @since 1.0
  * @see EnderApiClient
  * @see ClientSetup
  */
@@ -55,16 +43,6 @@ import net.neoforged.neoforge.client.event.ScreenEvent;
 public class LanShareHandler {
     /** 是否开启末影联机，默认关闭；跨屏幕实例保留。 */
     private static boolean enableEnder = false;
-
-    /** JSON 解析器，非 null，复用同一实例。 */
-    private static final Gson GSON = new Gson();
-
-    /** 后台轮询房间状态的单线程调度器，非 null，守护线程；当前无调用点。 */
-    private static final ScheduledExecutorService ROOM_POLL_EXECUTOR = Executors.newSingleThreadScheduledExecutor(r -> {
-        Thread thread = new Thread(r, "Ender-Room-Poll");
-        thread.setDaemon(true);
-        return thread;
-    });
 
     /**
      * 当屏幕初始化完成后调用。

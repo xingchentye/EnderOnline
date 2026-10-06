@@ -6,6 +6,7 @@
 package com.multiplayer.ender.network;
 
 import com.endercore.core.comm.CoreComm;
+import com.endercore.core.comm.EnderExecutors;
 import com.endercore.core.comm.client.CoreWebSocketClient;
 import com.endercore.core.comm.config.CoreWebSocketConfig;
 import org.slf4j.Logger;
@@ -103,14 +104,14 @@ public class NetworkClient {
             URI uri = URI.create("ws://" + host + ":" + port + "/ws"); 
             
             
-            new Thread(() -> {
+            EnderExecutors.daemonThread(() -> {
                 try {
                     client.connect(uri).get();
                     future.complete(null);
                 } catch (Exception e) {
                     future.completeExceptionally(e);
                 }
-            }).start();
+            }, "Ender-Network-Connect").start();
             
         } catch (Exception e) {
             future.completeExceptionally(e);

@@ -98,12 +98,17 @@ public final class CoreComm {
             server.awaitStarted(Duration.ofSeconds(5));
             System.out.println("CoreWebSocketServer started on ws://" + host + ":" + port);
 
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            // 交给统一关闭流程而不是自建 JVM 钩子：关闭顺序（先停进程、再关线程池）由
+            // EnderLifecycle 决定，自建钩子会与它并发竞争同一个线程池。
+            EnderLifecycle.onShutdown(() -> {
                 try {
                     server.stop(1000);
-                } catch (Exception ignored) {
+                } catch (Exception e) {
+                    // ignore-reason: 自检入口的关闭失败无需补救，进程即将退出；
+                    // 抛出会中断 EnderLifecycle 的其余关闭动作。
+                    System.err.println("CoreComm server stop failed: " + e);
                 }
-            }));
+            });
 
             new CountDownLatch(1).await();
             return;

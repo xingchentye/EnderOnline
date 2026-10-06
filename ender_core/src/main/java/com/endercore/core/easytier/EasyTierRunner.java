@@ -5,6 +5,8 @@
  */
 package com.endercore.core.easytier;
 
+import com.endercore.core.comm.EnderExecutors;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -244,7 +246,7 @@ public class EasyTierRunner {
         startPeerPoller();
 
         
-        new Thread(() -> {
+        EnderExecutors.daemonThread(() -> {
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
@@ -396,11 +398,8 @@ public class EasyTierRunner {
         if (pollerScheduler != null && !pollerScheduler.isShutdown()) {
             return;
         }
-        pollerScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "EasyTier-Poller");
-            t.setDaemon(true);
-            return t;
-        });
+        pollerScheduler = Executors.newSingleThreadScheduledExecutor(
+                EnderExecutors.daemonFactory("EasyTier-Poller"));
         pollerScheduler.scheduleWithFixedDelay(this::fetchPeerInfo, 2, 2, TimeUnit.SECONDS);
     }
 

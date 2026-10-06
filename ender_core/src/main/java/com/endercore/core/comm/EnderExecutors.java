@@ -110,6 +110,38 @@ public final class EnderExecutors {
     }
 
     /**
+     * 创建单个命名 daemon 线程。
+     *
+     * 供「生命周期由调用方自己管理、不适合放进共享池」的组件使用（例如按需启停的
+     * 广播线程、随进程存活的日志读取线程）。这些组件原先各自书写
+     * `new Thread(r, "名字")` + `setDaemon(true)`，命名与 daemon 属性容易漏写。
+     *
+     * 本方法是 ADR-06 允许出现裸线程的唯一入口：线程池的创建点。
+     * 返回的线程不会被自动启动，也不会被 EnderExecutors 关闭——调用方负责其生命周期。
+     *
+     * @param runnable 线程体，不能为 null
+     * @param name 线程名，不能为 null；同名线程会重名，调用方需自行保证唯一
+     * @return 已设为 daemon、尚未启动的线程，永不为 null
+     */
+    public static Thread daemonThread(Runnable runnable, String name) {
+        Thread thread = new Thread(runnable, name);
+        thread.setDaemon(true);
+        return thread;
+    }
+
+    /**
+     * 创建命名 daemon 线程工厂，供调用方自建执行器。
+     *
+     * 池本身仍归调用方所有并负责关闭；本方法只保证线程名与 daemon 属性一致。
+     *
+     * @param prefix 线程名前缀，不能为 null；实际名字为「前缀-序号」
+     * @return 线程工厂，永不为 null
+     */
+    public static ThreadFactory daemonFactory(String prefix) {
+        return namedFactory(prefix);
+    }
+
+    /**
      * 获取 IO 池。
      *
      * 用于网络收发、文件读写、进程输出读取等阻塞操作。
