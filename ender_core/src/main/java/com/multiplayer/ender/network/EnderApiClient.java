@@ -766,12 +766,12 @@ public class EnderApiClient {
         scaffoldingPort = PortAllocator.pickAvailablePort(DEFAULT_SCAFFOLDING_PORT, DEFAULT_SCAFFOLDING_PORT);
         profileRegistry.upsertHost(hostName);
         CoreWebSocketServer server = CoreComm.newServer(new InetSocketAddress("0.0.0.0", scaffoldingPort), 4 * 1024 * 1024, null);
-        server.register("c:ping", EnderApiClient::handlePing);
-        server.register("c:protocols", EnderApiClient::handleProtocols);
-        server.register("c:server_port", EnderApiClient::handleServerPort);
-        server.register("c:player_ping", EnderApiClient::handlePlayerPing);
-        server.register("c:player_profiles_list", EnderApiClient::handlePlayerProfilesList);
-        server.register("c:room_state_sync", EnderApiClient::handleRoomStateSync);
+        server.register(ScaffoldingProtocols.PING, EnderApiClient::handlePing);
+        server.register(ScaffoldingProtocols.PROTOCOLS, EnderApiClient::handleProtocols);
+        server.register(ScaffoldingProtocols.SERVER_PORT, EnderApiClient::handleServerPort);
+        server.register(ScaffoldingProtocols.PLAYER_PING, EnderApiClient::handlePlayerPing);
+        server.register(ScaffoldingProtocols.PLAYER_PROFILES_LIST, EnderApiClient::handlePlayerProfilesList);
+        server.register(ScaffoldingProtocols.ROOM_STATE_SYNC, EnderApiClient::handleRoomStateSync);
         server.start();
         server.awaitStarted(Duration.ofSeconds(3));
         scaffoldingServer = server;
@@ -879,10 +879,11 @@ public class EnderApiClient {
             return;
         }
         try {
-            client.sendSync("c:player_ping",
+            client.sendSync(ScaffoldingProtocols.PLAYER_PING,
                     ScaffoldingMessages.encodePlayerPing(LOCAL_MACHINE_ID, localPlayerName, VENDOR),
                     Duration.ofSeconds(10));
-            CoreResponse resp = client.sendSync("c:player_profiles_list", new byte[0], Duration.ofSeconds(10));
+            CoreResponse resp = client.sendSync(
+                    ScaffoldingProtocols.PLAYER_PROFILES_LIST, new byte[0], Duration.ofSeconds(10));
             if (!resp.isOk()) {
                 LOGGER.warn("Failed to fetch profiles: status={}", resp.status());
                 return;
@@ -893,7 +894,8 @@ public class EnderApiClient {
             }
 
             
-            CoreResponse stateResp = client.sendSync("c:room_state_sync", new byte[0], Duration.ofSeconds(10));
+            CoreResponse stateResp = client.sendSync(
+                    ScaffoldingProtocols.ROOM_STATE_SYNC, new byte[0], Duration.ofSeconds(10));
             if (stateResp.isOk()) {
                 String stateJson = new String(stateResp.payload(), StandardCharsets.UTF_8);
                 updateRoomManagementState(stateJson);
@@ -902,7 +904,8 @@ public class EnderApiClient {
             }
 
             
-            CoreResponse portResp = client.sendSync("c:server_port", new byte[0], Duration.ofSeconds(10));
+            CoreResponse portResp = client.sendSync(
+                    ScaffoldingProtocols.SERVER_PORT, new byte[0], Duration.ofSeconds(10));
             if (portResp.isOk()) {
                 int decodedPort = ScaffoldingMessages.decodePort(portResp.payload());
                 if (decodedPort >= 0) {
@@ -1002,13 +1005,7 @@ public class EnderApiClient {
      * @return 状态码为 0、负载为 NUL 分隔协议名的响应对象，永不为 null
      */
     private static CoreResponse handleProtocols(CoreRequest req) {
-        byte[] payload = String.join("\0",
-                "c:ping",
-                "c:protocols",
-                "c:server_port",
-                "c:player_ping",
-                "c:player_profiles_list",
-                "c:room_state_sync").getBytes(StandardCharsets.UTF_8);
+        byte[] payload = ScaffoldingProtocols.supportedPayloadUtf8();
         return new CoreResponse(0, req.requestId(), req.kind(), payload);
     }
 
