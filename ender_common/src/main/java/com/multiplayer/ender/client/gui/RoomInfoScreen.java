@@ -7,11 +7,12 @@
  */
 package com.multiplayer.ender.client.gui;
 
+import com.endercore.core.comm.EnderLifecycle;
+
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.multiplayer.ender.logic.ProcessLauncher;
 import com.multiplayer.ender.network.EnderApiClient;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
@@ -99,7 +100,7 @@ public class RoomInfoScreen extends EnderBaseScreen {
         LinearLayout footer = LinearLayout.horizontal().spacing(10);
         footer.addChild(Button.builder(Component.literal("断开连接"), button -> {
             EnderApiClient.setIdle();
-            new Thread(ProcessLauncher::stop, "Ender-Stopper").start();
+            EnderLifecycle.requestShutdownAsync();
             this.onClose();
         }).width(120).build());
         footer.addChild(Button.builder(Component.literal("返回"), button -> this.onClose()).width(120).build());

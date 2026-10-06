@@ -7,6 +7,8 @@
  */
 package com.multiplayer.ender.client.gui;
 
+import com.endercore.core.comm.EnderLifecycle;
+
 import com.multiplayer.ender.client.PlatformConfigHolder;
 
 import java.nio.file.Files;
@@ -25,7 +27,6 @@ import org.slf4j.LoggerFactory;
 
 import com.multiplayer.ender.logic.DownloadManager;
 import com.multiplayer.ender.logic.PlatformHelper;
-import com.multiplayer.ender.logic.ProcessLauncher;
 import com.multiplayer.ender.logic.VersionChecker;
 import com.multiplayer.ender.network.NetworkClient;
 import com.multiplayer.ender.network.EnderApiClient;
@@ -476,7 +477,7 @@ public class StartupScreen extends EnderBaseScreen {
      */
     private void cancelAndClose() {
         if (!keepProcessAlive && isFreshLaunch) {
-            new Thread(ProcessLauncher::stop, "Ender-Stopper").start();
+            EnderLifecycle.requestShutdownAsync();
         }
         this.onClose();
     }
@@ -491,7 +492,7 @@ public class StartupScreen extends EnderBaseScreen {
     public void removed() {
         super.removed();
         if (!keepProcessAlive && isFreshLaunch) {
-            new Thread(ProcessLauncher::stop, "Ender-Stopper").start();
+            EnderLifecycle.requestShutdownAsync();
         }
     }
 

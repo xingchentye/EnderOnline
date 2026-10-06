@@ -8,6 +8,8 @@
  */
 package com.multiplayer.ender.client;
 
+import com.endercore.core.comm.EnderLifecycle;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -430,7 +432,7 @@ public class ClientSetup {
         if (wasHostOk) {
              LOGGER.info("Detected world disconnect, stopping hosting...");
              EnderApiClient.setIdle();
-             new Thread(com.multiplayer.ender.logic.ProcessLauncher::stop, "Ender-Stopper").start();
+             EnderLifecycle.requestShutdownAsync();
              wasHostOk = false;
         }
     }

@@ -8,6 +8,8 @@
  */
 package com.multiplayer.ender.client.gui;
 
+import com.endercore.core.comm.EnderLifecycle;
+
 import com.multiplayer.ender.client.PlatformConfigHolder;
 import com.multiplayer.ender.client.UserNotifierHolder;
 
@@ -19,7 +21,6 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.multiplayer.ender.logic.ProcessLauncher;
 import com.multiplayer.ender.network.EnderApiClient;
 
 import net.minecraft.client.gui.components.AbstractWidget;
@@ -528,7 +529,7 @@ public class EnderDashboard extends EnderBaseScreen {
         if (currentMode == ViewMode.FULL) {
             this.layout.addToFooter(Button.builder(Component.literal("断开连接"), button -> {
                 EnderApiClient.setIdle();
-                new Thread(ProcessLauncher::stop, "Ender-Stopper").start();
+                EnderLifecycle.requestShutdownAsync();
                 wasConnected = false;
                 this.isUiConnected = false;
                 this.rebuildWidgets();
@@ -552,7 +553,7 @@ public class EnderDashboard extends EnderBaseScreen {
         
         footerLayout.addChild(Button.builder(Component.literal("断开连接"), b -> {
             EnderApiClient.setIdle();
-            new Thread(ProcessLauncher::stop, "Ender-Stopper").start();
+            EnderLifecycle.requestShutdownAsync();
             wasConnected = false;
             this.isUiConnected = false;
             this.onClose();
@@ -1607,7 +1608,7 @@ public class EnderDashboard extends EnderBaseScreen {
 
         roomInfo.addChild(Button.builder(Component.literal("关闭房间"), button -> {
             EnderApiClient.setIdle();
-            new Thread(ProcessLauncher::stop, "Ender-Stopper").start();
+            EnderLifecycle.requestShutdownAsync();
             wasConnected = false;
             this.isUiConnected = false;
             this.onClose();

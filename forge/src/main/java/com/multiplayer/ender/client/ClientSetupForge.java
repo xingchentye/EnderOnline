@@ -7,6 +7,8 @@
  */
 package com.multiplayer.ender.client;
 
+import com.endercore.core.comm.EnderLifecycle;
+
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -404,7 +406,7 @@ public class ClientSetupForge {
         if (wasHostOk) {
              LOGGER.info("Detected world disconnect, stopping hosting...");
              EnderApiClient.setIdle();
-             new Thread(com.multiplayer.ender.logic.ProcessLauncher::stop, "Ender-Stopper").start();
+             EnderLifecycle.requestShutdownAsync();
              wasHostOk = false;
         }
     }

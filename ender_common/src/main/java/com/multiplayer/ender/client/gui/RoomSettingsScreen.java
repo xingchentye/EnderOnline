@@ -7,6 +7,8 @@
  */
 package com.multiplayer.ender.client.gui;
 
+import com.endercore.core.comm.EnderLifecycle;
+
 import com.multiplayer.ender.client.PlatformConfigHolder;
 
 import com.multiplayer.ender.network.EnderApiClient;
@@ -134,7 +136,7 @@ public class RoomSettingsScreen extends Screen {
         // 底部操作行：左半宽 88 为断开按钮，右半宽 88 为返回按钮，中间留 4 像素
         Button disconnectBtn = Button.builder(Component.literal(isHost ? "关闭房间" : "退出联机"), b -> {
             EnderApiClient.setIdle();
-            new Thread(ProcessLauncher::stop, "Ender-Stopper").start();
+            EnderLifecycle.requestShutdownAsync();
             this.onClose();
         }).bounds(centerX - 90, currentY, 88, 20).build();
         this.addRenderableWidget(disconnectBtn);

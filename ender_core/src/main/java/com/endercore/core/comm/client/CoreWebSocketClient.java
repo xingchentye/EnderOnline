@@ -35,8 +35,8 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import com.endercore.core.comm.EnderExecutors;
 import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
@@ -134,22 +134,25 @@ public final class CoreWebSocketClient implements CoreConnectionManager, CoreMes
     /**
      * 构造客户端。
      *
-     * 只完成依赖装配与调度器创建，不发起任何网络动作。
+     * 只完成依赖装配，不发起任何网络动作。
      *
      * @param config 客户端配置，不能为 null
      * @param exceptionHandler 异常处理器，允许为 null，为 null 时使用丢弃全部回调的空实现
-     * @param callbackExecutor 回调执行器，允许为 null，为 null 时新建缓存线程池
+     * @param callbackExecutor 回调执行器，允许为 null，为 null 时复用共享 IO 池（EnderExecutors#io）。
+     * 无论哪种情况本类都不关闭该执行器——池的归属权在持有者，不在使用者
      * @throws NullPointerException 当 config 为 null 时抛出
      */
     public CoreWebSocketClient(CoreWebSocketConfig config, CoreExceptionHandler exceptionHandler, Executor callbackExecutor) {
         this.config = Objects.requireNonNull(config, "config");
         this.exceptionHandler = exceptionHandler == null ? new NoopExceptionHandler() : exceptionHandler;
-        this.callbackExecutor = callbackExecutor == null ? Executors.newCachedThreadPool() : callbackExecutor;
-        this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "endercore-core-comm-scheduler");
-            t.setDaemon(true);
-            return t;
-        });
+        // 未指定执行器时复用共享 IO 池，而不是每次新建缓存线程池。
+        // 缓存池无上限：连接风暴或回调堆积会无限创建线程，在移动端直接导致 OOM；
+        // 共享池有界队列配合 CallerRuns，把压力反馈给调用方而不是吞掉任务。
+        // 该池归 EnderExecutors 所有，本类不得关闭它。
+        this.callbackExecutor = callbackExecutor == null ? EnderExecutors.io() : callbackExecutor;
+        // 调度器同样归共享持有者所有：此前每次新建实例且从不 shutdown，
+        // 是确定的线程泄漏源（每个客户端实例泄漏一条线程）。
+        this.scheduler = EnderExecutors.scheduled();
         this.codec = new CoreFrameCodec(config.maxFrameBytes());
         this.dynamicBackoff = config.reconnectBackoffMin();
     }

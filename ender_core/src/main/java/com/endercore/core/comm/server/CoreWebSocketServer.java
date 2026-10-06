@@ -24,8 +24,8 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import com.endercore.core.comm.EnderExecutors;
 import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
@@ -77,12 +77,15 @@ public final class CoreWebSocketServer extends WebSocketServer {
      *
      * @param address 绑定地址，不能为 null
      * @param maxFrameBytes 单帧最大字节数，不得小于协议头长度
-     * @param handlerExecutor 请求与事件的处理执行器，允许为 null，为 null 时新建缓存线程池
+     * @param handlerExecutor 请求与事件的处理执行器，允许为 null，为 null 时复用共享工作池
+     * （EnderExecutors#work）。无论哪种情况本类都不关闭该执行器——池的归属权在持有者，不在使用者
      */
     public CoreWebSocketServer(InetSocketAddress address, int maxFrameBytes, Executor handlerExecutor) {
         super(address);
         this.codec = new CoreFrameCodec(maxFrameBytes);
-        this.handlerExecutor = handlerExecutor == null ? Executors.newCachedThreadPool() : handlerExecutor;
+        // 未指定执行器时复用共享工作池，而不是每次新建缓存线程池。
+        // 缓存池无上限：处理器一旦阻塞（例如等待后端进程），线程数会随连接数线性增长。
+        this.handlerExecutor = handlerExecutor == null ? EnderExecutors.work() : handlerExecutor;
     }
 
     /**
