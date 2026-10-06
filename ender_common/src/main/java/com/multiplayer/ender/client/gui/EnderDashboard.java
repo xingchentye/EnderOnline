@@ -12,6 +12,7 @@ import com.endercore.core.comm.EnderLifecycle;
 
 import com.multiplayer.ender.client.PlatformConfigHolder;
 import com.multiplayer.ender.logic.AccessControlRules;
+import com.multiplayer.ender.logic.InputParsers;
 import com.multiplayer.ender.client.UserNotifierHolder;
 
 import java.util.ArrayList;
@@ -1749,7 +1750,7 @@ public class EnderDashboard extends EnderBaseScreen {
      * 两组三输入框：重生点 (X Y Z) 与 世界边界 (中心X 中心Z 半径)，各自带一个应用按钮。
      *
      * 设计约束：输入框初值会优先取玩家当前坐标（房主正在现场），仅在拿不到玩家时回落到已保存值；
-     * 解析失败的输入不会覆盖字段（{@link #parseIntSafe} 返回旧值）。
+     * 解析失败的输入不会覆盖字段（{@link InputParsers#parseIntOr(String, int)} 返回旧值）。
      *
      * @param content 目标内容布局，不能为 null
      */
@@ -1770,19 +1771,19 @@ public class EnderDashboard extends EnderBaseScreen {
         EditBox respawnXBox = new EditBox(this.font, 0, 0, 64, 20, Component.literal("X"));
         respawnXBox.setValue(String.valueOf(fillX));
         respawnXBox.setResponder(val -> {
-            respawnX = parseIntSafe(val, respawnX);
+            respawnX = InputParsers.parseIntOr(val, respawnX);
             roomStateDirty = true;
         });
         EditBox respawnYBox = new EditBox(this.font, 0, 0, 64, 20, Component.literal("Y"));
         respawnYBox.setValue(String.valueOf(fillY));
         respawnYBox.setResponder(val -> {
-            respawnY = parseIntSafe(val, respawnY);
+            respawnY = InputParsers.parseIntOr(val, respawnY);
             roomStateDirty = true;
         });
         EditBox respawnZBox = new EditBox(this.font, 0, 0, 64, 20, Component.literal("Z"));
         respawnZBox.setValue(String.valueOf(fillZ));
         respawnZBox.setResponder(val -> {
-            respawnZ = parseIntSafe(val, respawnZ);
+            respawnZ = InputParsers.parseIntOr(val, respawnZ);
             roomStateDirty = true;
         });
         LinearLayout respawnRow = LinearLayout.horizontal().spacing(6);
@@ -1799,19 +1800,19 @@ public class EnderDashboard extends EnderBaseScreen {
         EditBox borderXBox = new EditBox(this.font, 0, 0, 64, 20, Component.literal("中心X"));
         borderXBox.setValue(String.valueOf(worldBorderCenterX));
         borderXBox.setResponder(val -> {
-            worldBorderCenterX = parseIntSafe(val, worldBorderCenterX);
+            worldBorderCenterX = InputParsers.parseIntOr(val, worldBorderCenterX);
             roomStateDirty = true;
         });
         EditBox borderZBox = new EditBox(this.font, 0, 0, 64, 20, Component.literal("中心Z"));
         borderZBox.setValue(String.valueOf(worldBorderCenterZ));
         borderZBox.setResponder(val -> {
-            worldBorderCenterZ = parseIntSafe(val, worldBorderCenterZ);
+            worldBorderCenterZ = InputParsers.parseIntOr(val, worldBorderCenterZ);
             roomStateDirty = true;
         });
         EditBox borderRadiusBox = new EditBox(this.font, 0, 0, 64, 20, Component.literal("半径"));
         borderRadiusBox.setValue(String.valueOf(worldBorderRadius));
         borderRadiusBox.setResponder(val -> {
-            worldBorderRadius = parseIntSafe(val, worldBorderRadius);
+            worldBorderRadius = InputParsers.parseIntOr(val, worldBorderRadius);
             roomStateDirty = true;
         });
         LinearLayout borderRow = LinearLayout.horizontal().spacing(6);
@@ -1849,7 +1850,7 @@ public class EnderDashboard extends EnderBaseScreen {
         EditBox retryBox = new EditBox(this.font, 0, 0, 200, 20, Component.literal("重试次数"));
         retryBox.setValue(String.valueOf(reconnectRetries));
         retryBox.setResponder(val -> {
-            reconnectRetries = parseIntSafe(val, reconnectRetries);
+            reconnectRetries = InputParsers.parseIntOr(val, reconnectRetries);
             roomStateDirty = true;
         });
         network.addChild(retryBox);
@@ -1908,14 +1909,14 @@ public class EnderDashboard extends EnderBaseScreen {
         EditBox cpuBox = new EditBox(this.font, 0, 0, 200, 20, Component.literal("CPU限制"));
         cpuBox.setValue(String.valueOf(cpuLimit));
         cpuBox.setResponder(val -> {
-            cpuLimit = parseIntSafe(val, cpuLimit);
+            cpuLimit = InputParsers.parseIntOr(val, cpuLimit);
             roomStateDirty = true;
         });
         backend.addChild(cpuBox);
         EditBox memBox = new EditBox(this.font, 0, 0, 200, 20, Component.literal("内存限制"));
         memBox.setValue(String.valueOf(memoryLimit));
         memBox.setResponder(val -> {
-            memoryLimit = parseIntSafe(val, memoryLimit);
+            memoryLimit = InputParsers.parseIntOr(val, memoryLimit);
             roomStateDirty = true;
         });
         backend.addChild(memBox);
@@ -2336,22 +2337,6 @@ public class EnderDashboard extends EnderBaseScreen {
         return Math.max(5, this.width / 80);
     }
 
-    /**
-     * 解析整数输入，失败时回落到给定默认值。
-     *
-     * 用于文本框：玩家输入中间态（空串、负号、字母）不应把字段清掉。
-     *
-     * @param value 原始输入，不能为 null；会先 trim
-     * @param fallback 解析失败时返回的值
-     * @return 解析结果；无法解析时返回 {@code fallback}
-     */
-    private int parseIntSafe(String value, int fallback) {
-        try {
-            return Integer.parseInt(value.trim());
-        } catch (Exception e) {
-            return fallback;
-        }
-    }
 }
 
 
