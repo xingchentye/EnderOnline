@@ -1,5 +1,5 @@
 /*
- * 本文件属于 EnderOnline NeoForge 适配层。
+ * 本文件属于 EnderOnline 客户端界面层。
  *
  * 职责：末影联机中心（仪表盘），把后端状态、房间管理、玩家列表与各项设置集中在一个界面里。
  *
@@ -7,6 +7,9 @@
  * 新增功能不要继续往这里堆，改动前先确认是否属于 §8 已规划的某个独立页面。
  */
 package com.multiplayer.ender.client.gui;
+
+import com.multiplayer.ender.client.PlatformConfigHolder;
+import com.multiplayer.ender.client.UserNotifierHolder;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -16,8 +19,6 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.multiplayer.ender.Config;
-import com.multiplayer.ender.client.ClientSetup;
 import com.multiplayer.ender.logic.ProcessLauncher;
 import com.multiplayer.ender.network.EnderApiClient;
 
@@ -74,7 +75,7 @@ import org.slf4j.LoggerFactory;
  * @since 1.0
  * @see EnderBaseScreen
  * @see EnderApiClient
- * @see ClientSetup
+ * @see UserNotifierHolder
  */
 public class EnderDashboard extends EnderBaseScreen {
     /** 本类日志记录器，非 null。 */
@@ -315,9 +316,9 @@ public class EnderDashboard extends EnderBaseScreen {
     public EnderDashboard(Screen parent, ViewMode mode) {
         super(Component.literal("末影联机中心"), parent);
         this.currentMode = mode;
-        this.tempPath = Config.EXTERNAL_ender_PATH.get();
-        this.tempAutoUpdate = Config.AUTO_UPDATE.get();
-        this.tempAutoStart = Config.AUTO_START_BACKEND.get();
+        this.tempPath = PlatformConfigHolder.get().externalCorePath();
+        this.tempAutoUpdate = PlatformConfigHolder.get().autoUpdate();
+        this.tempAutoStart = PlatformConfigHolder.get().autoStartBackend();
     }
 
     /**
@@ -650,10 +651,10 @@ public class EnderDashboard extends EnderBaseScreen {
      * NOTE: 本方法当前无调用点——仪表盘本身不提供这三项的编辑入口，入口在 {@link EnderConfigScreen}。
      */
     private void saveConfig() {
-        Config.EXTERNAL_ender_PATH.set(this.tempPath);
-        Config.AUTO_UPDATE.set(this.tempAutoUpdate);
-        Config.AUTO_START_BACKEND.set(this.tempAutoStart);
-        Config.CLIENT_SPEC.save();
+        PlatformConfigHolder.get().setExternalCorePath(this.tempPath);
+        PlatformConfigHolder.get().setAutoUpdate(this.tempAutoUpdate);
+        PlatformConfigHolder.get().setAutoStartBackend(this.tempAutoStart);
+        PlatformConfigHolder.get().save();
     }
 
     /**
@@ -1589,7 +1590,7 @@ public class EnderDashboard extends EnderBaseScreen {
             
             roomRemark = remarkBox.getValue();
             roomStateDirty = true;
-            ClientSetup.showToast(Component.literal("提示"), Component.literal("房间描述已保存"));
+            UserNotifierHolder.get().toast(Component.literal("提示"), Component.literal("房间描述已保存"));
         }).width(44).build();
         saveBtn.active = isHostConnected();
         remarkLayout.addChild(saveBtn);
@@ -1598,9 +1599,9 @@ public class EnderDashboard extends EnderBaseScreen {
         roomInfo.addChild(Button.builder(Component.literal("复制房间号"), button -> {
             try {
                 this.minecraft.keyboardHandler.setClipboard(finalRoomCode);
-                ClientSetup.showToast(Component.literal("提示"), Component.literal("房间号已复制"));
+                UserNotifierHolder.get().toast(Component.literal("提示"), Component.literal("房间号已复制"));
             } catch (Exception e) {
-                ClientSetup.showToast(Component.literal("提示"), Component.literal("复制失败，请手动复制房间号"));
+                UserNotifierHolder.get().toast(Component.literal("提示"), Component.literal("复制失败，请手动复制房间号"));
             }
         }).width(200).build());
 
@@ -1643,7 +1644,7 @@ public class EnderDashboard extends EnderBaseScreen {
             visitorPermission = permissionCycle[(idx + 1) % permissionCycle.length];
             button.setMessage(Component.literal("访客权限: " + visitorPermission));
             roomStateDirty = true;
-            ClientSetup.showToast(Component.literal("提示"), Component.literal("访客权限已更新"));
+            UserNotifierHolder.get().toast(Component.literal("提示"), Component.literal("访客权限已更新"));
         }).width(200).build();
         permission.addChild(permissionBtn);
 
@@ -1651,7 +1652,7 @@ public class EnderDashboard extends EnderBaseScreen {
             whitelistEnabled = !whitelistEnabled;
             button.setMessage(Component.literal("白名单启用: " + (whitelistEnabled ? "开" : "关")));
             roomStateDirty = true;
-            ClientSetup.showToast(Component.literal("提示"), Component.literal("白名单设置已更新"));
+            UserNotifierHolder.get().toast(Component.literal("提示"), Component.literal("白名单设置已更新"));
         }).width(200).build());
 
         permission.addChild(Button.builder(Component.literal("详细名单管理 (白名单/黑名单/禁言)"), button -> {
@@ -1704,25 +1705,25 @@ public class EnderDashboard extends EnderBaseScreen {
             allowCheats = !allowCheats;
             b.setMessage(Component.literal("允许作弊: " + (allowCheats ? "开" : "关")));
             roomStateDirty = true;
-            ClientSetup.showToast(Component.literal("提示"), Component.literal("规则已更新"));
+            UserNotifierHolder.get().toast(Component.literal("提示"), Component.literal("规则已更新"));
         }).width(200).build());
         rules.addChild(Button.builder(Component.literal("保留物品: " + (keepInventory ? "开" : "关")), b -> {
             keepInventory = !keepInventory;
             b.setMessage(Component.literal("保留物品: " + (keepInventory ? "开" : "关")));
             roomStateDirty = true;
-            ClientSetup.showToast(Component.literal("提示"), Component.literal("规则已更新"));
+            UserNotifierHolder.get().toast(Component.literal("提示"), Component.literal("规则已更新"));
         }).width(200).build());
         rules.addChild(Button.builder(Component.literal("允许PVP: " + (pvpAllowed ? "开" : "关")), b -> {
             pvpAllowed = !pvpAllowed;
             b.setMessage(Component.literal("允许PVP: " + (pvpAllowed ? "开" : "关")));
             roomStateDirty = true;
-            ClientSetup.showToast(Component.literal("提示"), Component.literal("规则已更新"));
+            UserNotifierHolder.get().toast(Component.literal("提示"), Component.literal("规则已更新"));
         }).width(200).build());
         rules.addChild(Button.builder(Component.literal("天气锁定: " + (weatherLock ? "开" : "关")), b -> {
             weatherLock = !weatherLock;
             b.setMessage(Component.literal("天气锁定: " + (weatherLock ? "开" : "关")));
             roomStateDirty = true;
-            ClientSetup.showToast(Component.literal("提示"), Component.literal("规则已更新"));
+            UserNotifierHolder.get().toast(Component.literal("提示"), Component.literal("规则已更新"));
         }).width(200).build());
 
         rules.addChild(Button.builder(Component.literal("更多游戏规则设置..."), b -> {
@@ -1790,7 +1791,7 @@ public class EnderDashboard extends EnderBaseScreen {
         world.addChild(respawnRow);
         world.addChild(Button.builder(Component.literal("应用重生点"), b -> {
             applyRespawn();
-            ClientSetup.showToast(Component.literal("提示"), Component.literal("重生点已应用"));
+            UserNotifierHolder.get().toast(Component.literal("提示"), Component.literal("重生点已应用"));
         }).width(200).build());
 
         EditBox borderXBox = new EditBox(this.font, 0, 0, 64, 20, Component.literal("中心X"));
@@ -1819,7 +1820,7 @@ public class EnderDashboard extends EnderBaseScreen {
         world.addChild(borderRow);
         world.addChild(Button.builder(Component.literal("应用世界边界"), b -> {
             applyWorldBorder();
-            ClientSetup.showToast(Component.literal("提示"), Component.literal("世界边界已应用"));
+            UserNotifierHolder.get().toast(Component.literal("提示"), Component.literal("世界边界已应用"));
         }).width(200).build());
         content.addChild(world);
     }
@@ -1841,7 +1842,7 @@ public class EnderDashboard extends EnderBaseScreen {
             autoReconnect = !autoReconnect;
             b.setMessage(Component.literal("自动重连: " + (autoReconnect ? "开" : "关")));
             roomStateDirty = true;
-            ClientSetup.showToast(Component.literal("提示"), Component.literal("设置已更新"));
+            UserNotifierHolder.get().toast(Component.literal("提示"), Component.literal("设置已更新"));
         }).width(200).build());
         EditBox retryBox = new EditBox(this.font, 0, 0, 200, 20, Component.literal("重试次数"));
         retryBox.setValue(String.valueOf(reconnectRetries));
@@ -1880,14 +1881,14 @@ public class EnderDashboard extends EnderBaseScreen {
                 backendVersion = backendVersions.get((idx + 1) % backendVersions.size()).getAsString();
                 b.setMessage(Component.literal("版本: " + backendVersion));
                 roomStateDirty = true;
-                ClientSetup.showToast(Component.literal("提示"), Component.literal("设置已更新"));
+                UserNotifierHolder.get().toast(Component.literal("提示"), Component.literal("设置已更新"));
             }
         }).width(200).build());
         backend.addChild(Button.builder(Component.literal("更新策略: " + updatePolicy), b -> {
             updatePolicy = "立即".equals(updatePolicy) ? "延后" : "立即";
             b.setMessage(Component.literal("更新策略: " + updatePolicy));
             roomStateDirty = true;
-            ClientSetup.showToast(Component.literal("提示"), Component.literal("设置已更新"));
+            UserNotifierHolder.get().toast(Component.literal("提示"), Component.literal("设置已更新"));
         }).width(200).build());
         backend.addChild(Button.builder(Component.literal("日志级别: " + logLevel), b -> {
             if ("INFO".equals(logLevel)) {
@@ -1899,7 +1900,7 @@ public class EnderDashboard extends EnderBaseScreen {
             }
             b.setMessage(Component.literal("日志级别: " + logLevel));
             roomStateDirty = true;
-            ClientSetup.showToast(Component.literal("提示"), Component.literal("设置已更新"));
+            UserNotifierHolder.get().toast(Component.literal("提示"), Component.literal("设置已更新"));
         }).width(200).build());
 
         EditBox cpuBox = new EditBox(this.font, 0, 0, 200, 20, Component.literal("CPU限制"));
@@ -2297,9 +2298,9 @@ public class EnderDashboard extends EnderBaseScreen {
         try {
             String json = buildRoomManagementStateJson().toString();
             this.minecraft.keyboardHandler.setClipboard(json);
-            ClientSetup.showToast(Component.literal("提示"), Component.literal("配置已复制到剪贴板"));
+            UserNotifierHolder.get().toast(Component.literal("提示"), Component.literal("配置已复制到剪贴板"));
         } catch (Exception e) {
-            ClientSetup.showToast(Component.literal("提示"), Component.literal("导出失败"));
+            UserNotifierHolder.get().toast(Component.literal("提示"), Component.literal("导出失败"));
         }
     }
 
