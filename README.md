@@ -216,7 +216,7 @@ CI 会在每次 push 与 Pull Request 上依次执行编译、单元测试与两
 |---|---|---|
 | **Windows** | ✅ 完整支持（自动下载并托管后端） | ✅ 完整支持 |
 | **Linux / macOS** | ✅ 支持（需自备后端或可下载） | ✅ 完整支持 |
-| **Android**（PojavLauncher / Amethyst） | ⚠️ 需设备上已具备 EasyTier | ✅ 完整支持 |
+| **Android**（PojavLauncher / Amethyst） | ⚠️ 自动下载并尝试运行后端（在部分设备上可能需要 root 或 Magisk） | ✅ 完整支持 |
 
 Android 端界面按触控优化：命中区不小于 48vp，布局按视口单位自适应。
 
