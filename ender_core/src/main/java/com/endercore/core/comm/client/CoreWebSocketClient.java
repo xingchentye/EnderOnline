@@ -128,8 +128,20 @@ public final class CoreWebSocketClient implements CoreConnectionManager, CoreMes
     private volatile CompletableFuture<Void> connectFuture;
     /** 是否由本实例主动发起关闭，用于区分正常关闭与对端断开。 */
     private volatile boolean closing;
-    /** 当前重连退避时长，初始为配置的最小值，每次重连后翻倍并封顶。 */
-    private volatile Duration dynamicBackoff;
+    /**
+     * 当前重连退避时长，单位为毫秒，初始为配置的最小值，每次重连后翻倍并封顶。
+     *
+     * 用原子类型而不是 volatile Duration：scheduleReconnect 是「读取再写回」的读-改-写，
+     * 超时任务与关闭回调并发触发时会丢更新（baseline-audit 的 D6），使退避策略失效。
+     */
+    private final AtomicLong dynamicBackoffMillis = new AtomicLong();
+    /**
+     * 在途的重连任务。
+     *
+     * 允许为 null，表示当前没有待执行的重连。保留引用是为了在 close 时取消它：
+     * 否则关闭后仍会有一条排队的重连任务醒来并尝试连接。
+     */
+    private volatile ScheduledFuture<?> reconnectTask;
 
     /**
      * 构造客户端。
@@ -154,7 +166,7 @@ public final class CoreWebSocketClient implements CoreConnectionManager, CoreMes
         // 是确定的线程泄漏源（每个客户端实例泄漏一条线程）。
         this.scheduler = EnderExecutors.scheduled();
         this.codec = new CoreFrameCodec(config.maxFrameBytes());
-        this.dynamicBackoff = config.reconnectBackoffMin();
+        this.dynamicBackoffMillis.set(config.reconnectBackoffMin().toMillis());
     }
 
     /**
@@ -222,6 +234,12 @@ public final class CoreWebSocketClient implements CoreConnectionManager, CoreMes
         Objects.requireNonNull(timeout, "timeout");
         synchronized (lifecycleLock) {
             closing = true;
+            // 取消在途重连：不取消的话，已排队的任务会在关闭完成后醒来并发起连接
+            ScheduledFuture<?> pending = reconnectTask;
+            if (pending != null) {
+                pending.cancel(false);
+                reconnectTask = null;
+            }
             setState(ConnectionState.CLOSING);
             WebSocketClient c = this.client;
             if (c == null) {
@@ -440,7 +458,7 @@ public final class CoreWebSocketClient implements CoreConnectionManager, CoreMes
              */
             @Override
             public void onOpen(ServerHandshake handshakedata) {
-                dynamicBackoff = config.reconnectBackoffMin();
+                dynamicBackoffMillis.set(config.reconnectBackoffMin().toMillis());
                 setState(ConnectionState.CONNECTED);
                 if (connectFuture != null && !connectFuture.isDone()) {
                     connectFuture.complete(null);
@@ -601,13 +619,14 @@ public final class CoreWebSocketClient implements CoreConnectionManager, CoreMes
     /**
      * 按当前退避时长安排一次重连。
      *
-     * 实际延迟为 dynamicBackoff 加上 0 到 99 毫秒的随机抖动；任务执行后把退避翻倍并封顶。
-     * 任务触发时若已进入主动关闭流程则直接放弃，不发起连接。
+     * 实际延迟为当前退避加上 0 到 99 毫秒的随机抖动，避免多个客户端同时重连；
+     * 任务执行后把退避翻倍并封顶。任务触发时若已进入主动关闭流程则直接放弃，不发起连接。
+     * 任务句柄记录在 reconnectTask 中，供 close 取消。
      */
     private void scheduleReconnect() {
-        Duration backoff = dynamicBackoff;
+        long backoff = dynamicBackoffMillis.get();
         long jitter = ThreadLocalRandom.current().nextLong(0, 100);
-        scheduler.schedule(() -> {
+        reconnectTask = scheduler.schedule(() -> {
             if (closing) {
                 return;
             }
@@ -616,21 +635,29 @@ public final class CoreWebSocketClient implements CoreConnectionManager, CoreMes
             } catch (Exception e) {
                 exceptionHandler.onConnectionError(new CoreConnectException("重连失败", e));
             }
-            dynamicBackoff = nextBackoff(dynamicBackoff);
-        }, backoff.toMillis() + jitter, TimeUnit.MILLISECONDS);
+            // 原子翻倍：即使上一次任务尚未写回，也不会丢失本次更新
+            dynamicBackoffMillis.updateAndGet(this::nextBackoffMillis);
+        }, backoff + jitter, TimeUnit.MILLISECONDS);
     }
 
     /**
-     * 计算下一次重连退避时长。
+     * 计算下一次重连退避时长（毫秒）。
      *
      * 计算顺序为「当前值翻倍」再「按配置上限封顶」，返回值不小于入参。
+     * 翻倍先做溢出保护再封顶：直接用乘法溢出会得到负值，导致退避变成立即重连。
      *
-     * @param current 当前退避时长，不能为 null
-     * @return 下一次退避时长，永不为 null，非负
+     * @param currentMillis 当前退避毫秒数，非负
+     * @return 下一次退避毫秒数，非负且不超过配置上限
      */
-    private Duration nextBackoff(Duration current) {
-        long next = Math.min(current.toMillis() * 2L, config.reconnectBackoffMax().toMillis());
-        return Duration.ofMillis(next);
+    private long nextBackoffMillis(long currentMillis) {
+        long max = config.reconnectBackoffMax().toMillis();
+        if (currentMillis >= max) {
+            return max;
+        }
+        if (currentMillis > Long.MAX_VALUE / 2L) {
+            return max;
+        }
+        return Math.min(currentMillis * 2L, max);
     }
 
     /**
