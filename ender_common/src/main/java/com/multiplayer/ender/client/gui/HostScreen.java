@@ -1,9 +1,9 @@
 /*
- * 本文件属于 EnderOnline Forge 适配层。
+ * 本文件属于 EnderOnline 客户端界面层。
  *
- * 职责：以房主身份开房的界面，取本地端口发起托管并轮询托管状态。
+ * 职责：创建房间界面，发起托管请求并展示房间码与下载进度。
  *
- * 本类当前没有跳转入口（不可达），且状态回调存在跨线程写入，见类注释中的 FIXME。
+ * 关键约束：关闭界面时若请求仍在途则回退为空闲状态，避免后端留下「僵尸托管」。
  */
 package com.multiplayer.ender.client.gui;
 
@@ -19,73 +19,56 @@ import net.minecraft.network.chat.Component;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * 创建房间界面（Forge 侧当前不可达）。
+ * 创建房间界面。
  *
- * 属于「以房主身份开房」页：点击「开始托管」后取单人世界端口并向后台发起托管请求，
- * 随后在 tick 中轮询后端状态；进入 host-ok 时把父控制台标记为已连接并关闭本界面。
- * Forge 侧目前没有任何跳转入口（neoforge 侧同样没有），因此属于不可达界面，
- * 控制台概览页已提供开房入口。
+ * 由仪表盘或暂停菜单跳入，点击「开始」后向 {@link EnderApiClient} 请求托管；
+ * 成功后把房间码展示出来，并让父屏幕（若是仪表盘）切到已连接状态。
  *
  * 设计约束：
- * 1. 点击有 300ms 去抖（lastClickTime），窗口内的重复点击被忽略。
- * 2. 默认端口 25565；单人服务器已创建时改用其实际端口。
- * 3. 关闭界面时若托管仍在进行且尚未建立连接，会调用 EnderApiClient.setIdle() 取消托管。
- * 4. downloadProgress 小于 0 表示不显示进度条；但本类内没有任何写入点，
- *    因此进度条分支实际永远不会进入。
+ * 1. 开始按钮有 300 毫秒去抖，且 {@code isWorking} 为真时直接返回，防止重复发起托管请求。
+ * 2. {@link #onClose()} 区分两种关闭：请求仍在途且尚未成功时把后端置为空闲；已经拿到房间码则保留连接。
+ * 3. 界面尺寸走原版布局，不做固定像素定位（ADR-09/10 的目标状态）。
  *
- * TODO(P5, 2026-12-31): 明确是否保留本界面；控制台概览页已覆盖开房流程。
+ * 线程安全性：字段均在客户端主线程读写；{@code downloadProgress} 由后台下载回调写入，故声明为 volatile。
  *
- * 线程安全性：Screen 只在客户端主线程使用。但 checkHostStatus 的异步回调直接写 statusText、
- * roomCode 并调用父控制台的 setConnected，未切回主线程。
- *
- * @see EnderDashboard
+ * @since 1.0
+ * @see EnderApiClient
  */
 public class HostScreen extends EnderBaseScreen {
-    /** 主状态文本，初值为语言键 ender.host.status.ready 对应的文案。 */
+    /** 当前状态文本，非 null，默认取语言键 {@code ender.host.status.ready}。 */
     private Component statusText = Component.translatable("ender.host.status.ready");
-
-    /** 已获得的房间号，默认空串；非空时渲染邀请码与分享提示。 */
+    /** 房间联机码，默认空串表示尚未拿到；非 null。 */
     private String roomCode = "";
-
-    /** 是否正在发起托管，默认 false；为 true 时启动 tick 轮询并禁用开始按钮。 */
+    /** 是否正在处理托管请求，用于去抖与决定关闭时是否回退空闲。 */
     private boolean isWorking = false;
-
-    /** 托管是否已成功建立，默认 false；为 true 时关闭界面不再取消托管。 */
+    /** 是否已成功建立连接；为真时关闭界面不回退空闲。 */
     private boolean keepConnection = false;
-
-    /** 「开始托管」按钮，initContent 中创建；发起请求时会被置灰。 */
+    /** 开始按钮；在 {@link #initContent()} 中创建，之前为 null。 */
     private Button startBtn;
-
-    /** 上次状态轮询的时间戳，单位毫秒；仅用于每秒节流。 */
+    /** 上次状态轮询时间戳，单位毫秒（System.currentTimeMillis）。 */
     private long lastStateCheck = 0;
-
-    /** 上次点击的时间戳，单位毫秒；用于 300ms 点击去抖。 */
+    /** 上次点击时间戳，单位毫秒，用于 300 毫秒双击保护。 */
     private long lastClickTime = 0;
 
-    /**
-     * 核心下载进度，取值 -1.0 到 1.0。
-     *
-     * 小于 0 表示不显示进度条；本类内没有写入点。声明为 volatile 是因为该字段被设计为
-     * 供下载线程写入、渲染线程读取。
-     */
+    /** 核心下载进度，取值 -1.0 表示「无进度可显示」，否则为 0.0..1.0；由后台线程写入。 */
     private volatile double downloadProgress = -1.0;
 
-    /** JSON 解析器，Gson 实例线程安全，可跨线程复用。 */
+    /** JSON 解析器，非 null，复用同一实例以避免每次轮询新建。 */
     private static final Gson GSON = new Gson();
 
     /**
      * 构造创建房间界面。
      *
-     * @param parent 父屏幕，允许为 null；为 null 时关闭本屏幕会退回游戏界面
+     * @param parent 父屏幕，用于返回；若为 {@link EnderDashboard}，成功后会被通知切换状态
      */
     public HostScreen(Screen parent) {
         super(Component.translatable("ender.host.title"), parent);
     }
 
     /**
-     * 填充内容区，契约见 EnderBaseScreen#initContent。
+     * 初始化界面内容。
      *
-     * 内容区自上而下为「开始托管」与「取消」两个宽 200 的按钮；开始按钮的引用被留存以便置灰。
+     * 内容区从上到下依次是「开始」按钮与「取消」按钮。
      */
     @Override
     protected void initContent() {
@@ -104,12 +87,10 @@ public class HostScreen extends EnderBaseScreen {
     }
 
     /**
-     * 发起托管请求。
+     * 开始托管房间。
      *
-     * 先做 300ms 去抖与 isWorking 判定，再取端口与玩家名发起异步托管。
-     * 拿到房间号即更新状态文本；拿不到则恢复按钮并允许重试。
-     *
-     * 幂等性：去抖窗口内与进行中的重复调用都会被忽略。
+     * 先做双击与重复请求保护，随后取本地集成服务器的实际端口（单机未开房间时回落 25565），
+     * 再向后端发起托管请求；成功写入房间码，失败恢复按钮并给出失败文案。
      */
     private void startHosting() {
         long now = System.currentTimeMillis();
@@ -119,14 +100,17 @@ public class HostScreen extends EnderBaseScreen {
         isWorking = true;
         statusText = Component.translatable("ender.host.status.requesting");
         startBtn.active = false;
-
-        int port = 25565;
+        
+        int port = 25565; 
         if (this.minecraft.getSingleplayerServer() != null) {
             port = this.minecraft.getSingleplayerServer().getPort();
         }
         String playerName = this.minecraft.getUser().getName();
 
-        EnderApiClient.startHosting(port, playerName).thenAccept(roomCode -> {
+        EnderApiClient.startHosting(port, playerName, (p) -> {
+            this.downloadProgress = p;
+        }).thenAccept(roomCode -> {
+            this.downloadProgress = -1.0;
             if (roomCode != null && !roomCode.isEmpty()) {
                 statusText = Component.translatable("ender.host.status.success");
                 this.roomCode = roomCode;
@@ -139,9 +123,9 @@ public class HostScreen extends EnderBaseScreen {
     }
 
     /**
-     * 每刻更新，契约见 Screen#tick。
+     * 每 tick 更新。
      *
-     * 仅在 isWorking 为 true 时按 1000ms 节流轮询一次托管状态。
+     * 仅在请求进行中时按 1 秒间隔轮询托管状态，避免空转。
      */
     @Override
     public void tick() {
@@ -156,14 +140,12 @@ public class HostScreen extends EnderBaseScreen {
     }
 
     /**
-     * 轮询一次托管状态。
+     * 检查托管状态。
      *
-     * 状态为 host-ok 时记录房间号、置 keepConnection、把父控制台标记为已连接并关闭本界面；
-     * host-starting 与 host-scanning 只更新状态文案。
+     * 轮询后端状态 JSON：进入 host-ok 时记录房间码、标记保留连接、通知父仪表盘并自动关闭本界面；
+     * host-starting / host-scanning 则更新进度文案。
      *
-     * FIXME(P2, 2026-12-31): 本回调运行在 EnderApiClient 的回调线程，却直接写入 statusText、roomCode、
-     * keepConnection 并调用父控制台 setConnected，跨线程读写界面状态缺少内存可见性保证；
-     * 应统一经 minecraft.execute 切回客户端主线程。
+     * 失败容忍：解析异常被静默忽略——状态轮询本身就是尽力而为，下一 tick 会重试。
      */
     private void checkHostStatus() {
         EnderApiClient.getState().thenAccept(stateJson -> {
@@ -172,7 +154,7 @@ public class HostScreen extends EnderBaseScreen {
                 JsonObject json = GSON.fromJson(stateJson, JsonObject.class);
                 if (json.has("state")) {
                     String state = json.get("state").getAsString();
-
+                    
                     if ("host-ok".equals(state)) {
                         if (json.has("room")) {
                             this.roomCode = json.get("room").getAsString();
@@ -181,7 +163,7 @@ public class HostScreen extends EnderBaseScreen {
                             if (this.parent instanceof EnderDashboard) {
                                 ((EnderDashboard) this.parent).setConnected(true);
                             }
-
+                            
                             this.minecraft.execute(this::onClose);
                         }
                     } else if ("host-starting".equals(state)) {
@@ -196,9 +178,9 @@ public class HostScreen extends EnderBaseScreen {
     }
 
     /**
-     * 关闭屏幕，契约见 EnderBaseScreen#onClose。
+     * 关闭屏幕。
      *
-     * 若托管仍在进行且尚未建立连接，会先把后端置为空闲，避免留下半开的房间。
+     * 若请求仍在途且尚未成功，先把后端置为空闲再返回父屏幕，防止留下无人认领的房间。
      */
     @Override
     public void onClose() {
@@ -209,26 +191,28 @@ public class HostScreen extends EnderBaseScreen {
     }
 
     /**
-     * 渲染屏幕，契约见 EnderBaseScreen#render。
+     * 渲染界面。
      *
-     * 在头部下方绘制状态文本；已获得房间号时追加邀请码与分享提示；
-     * downloadProgress 不小于 0 时再绘制一条进度条与百分比文案。
+     * 在原版渲染之上画状态文本、房间码与分享提示，并在有下载进度时画一条进度条。
+     *
+     * @param guiGraphics 绘图上下文，不能为 null
+     * @param mouseX 鼠标 X 坐标，单位为逻辑像素
+     * @param mouseY 鼠标 Y 坐标，单位为逻辑像素
+     * @param partialTick 当前帧的部分刻进度，取值 0.0..1.0
      */
     @Override
     public void render(@NotNull GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
         super.render(guiGraphics, mouseX, mouseY, partialTick);
-
-        // 状态文本贴在头部下方 20 像素处，后续行按 20/35 像素递进
+        
         int textY = this.layout.getHeaderHeight() + 20;
         guiGraphics.drawCenteredString(this.font, this.statusText, this.width / 2, textY, 0xAAAAAA);
-
+        
         if (!roomCode.isEmpty()) {
-            guiGraphics.drawCenteredString(this.font, Component.translatable("ender.host.invite_code_prefix").append(roomCode), this.width / 2, textY + 20, 0x55FF55);
-            guiGraphics.drawCenteredString(this.font, Component.translatable("ender.host.share_hint"), this.width / 2, textY + 35, 0xAAAAAA);
+             guiGraphics.drawCenteredString(this.font, Component.translatable("ender.host.invite_code_prefix").append(roomCode), this.width / 2, textY + 20, 0x55FF55);
+             guiGraphics.drawCenteredString(this.font, Component.translatable("ender.host.share_hint"), this.width / 2, textY + 35, 0xAAAAAA);
         }
 
         if (downloadProgress >= 0) {
-            // 进度条：宽 200、高 4，水平居中，位于状态文本下方 40 像素
             int barWidth = 200;
             int barHeight = 4;
             int barX = this.width / 2 - barWidth / 2;

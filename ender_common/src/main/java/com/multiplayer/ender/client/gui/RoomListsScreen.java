@@ -1,11 +1,13 @@
 /*
- * 本文件属于 EnderOnline NeoForge 适配层。
+ * 本文件属于 EnderOnline 客户端界面层。
  *
- * 职责：名单管理界面，编辑白名单 / 黑名单 / 禁言列表并写回后端房间管理状态。
+ * 职责：玩家名单管理界面，维护白名单、黑名单与禁言列表并整份同步到后端。
  *
- * 关键约束：每次改动都必须立刻把整份房间管理状态推回后端，界面不保留未提交的本地改动。
+ * 本类持有后端状态的一份本地快照，增删都基于该快照整份回推。
  */
 package com.multiplayer.ender.client.gui;
+
+import com.multiplayer.ender.client.UserNotifierHolder;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
@@ -22,55 +24,56 @@ import net.minecraft.network.chat.Component;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * 名单管理界面。
+ * 玩家名单管理界面。
  *
- * 由房间信息或权限页的「详细名单管理」入口跳入。三个标签页共用同一份后端状态对象，
- * 通过切换 {@code currentTab} 决定渲染与编辑哪一个列表。
+ * 属于名单管理页：由 EnderDashboard 的「权限与访客」页与 RoomInfoScreen 的「详细列表」
+ * 按钮打开；可在白名单、黑名单、禁言列表之间切换，添加或移除玩家，每次改动立即推送后端。
  *
  * 设计约束：
- * 1. 每次增删都调用 {@link EnderApiClient#updateRoomManagementState} 推送整份状态；改动是即时落地的，没有「保存」按钮。
- * 2. 同一玩家名在同一列表内不重复添加（忽略大小写），移除按首次匹配执行。
- * 3. {@code isLoading} 为真时列表显示「加载中...」，此时禁止依赖列表内容。
- * 4. 渲染前必须保证 {@code stateJson} 非 null，否则列表为空——进入界面时先 loadState。
+ * 1. 三个名单共用同一份后端状态 JSON，本类只切换查看的键名（currentTab），不缓存三份副本。
+ * 2. 增删都基于本地 stateJson 快照整份回推，后端不做字段级合并，
+ *    因此与其它客户端的并发修改会互相覆盖（后推者胜）。
+ * 3. 布局硬编码：列表区域自 y=32 到 屏幕高度-60，行宽 300 像素、行高 24 像素。
  *
- * 线程安全性：字段在客户端主线程读写；异步回调通过 {@code minecraft.execute} 回到主线程后再刷新列表。
+ * 线程安全性：Screen 只在客户端主线程使用；loadState 的异步回调经 Minecraft#execute
+ * 切回主线程后才写入 stateJson / isLoading 并刷新列表。
  *
- * @since 1.0
  * @see AddListEntryScreen
- * @see RoomInfoScreen
  */
 public class RoomListsScreen extends EnderBaseScreen {
-    /** JSON 解析器，非 null，复用同一实例。 */
+    /** JSON 解析器，Gson 实例线程安全，可跨线程复用。 */
     private static final Gson GSON = new Gson();
 
-    /** 当前选中的标签页，取值 whitelist / blacklist / mute_list，默认 whitelist。 */
+    /** 当前查看的名单类型，取值 whitelist / blacklist / mute_list，默认 whitelist。 */
     private String currentTab = "whitelist"; 
-
-    /** 房间管理状态；允许为 null，为 null 时列表为空且增删操作直接返回。 */
+    /** 后端状态快照，允许为 null（未加载或加载失败）；增删操作都基于它整份回推。 */
     private JsonObject stateJson;
 
-    /** 是否正在加载状态，初始 true，首次加载完成后置 false。 */
+    /** 是否仍在加载状态，默认 true；true 时列表区域显示「加载中...」。 */
     private boolean isLoading = true;
 
-    /** 玩家列表控件；在 {@link #initContent()} 中创建，之前为 null。 */
+    /** 玩家名单列表组件，initContent 中创建；在此之前为 null。 */
     private PlayerList playerList;
 
-    /** 标签页切换按钮；在 {@link #initContent()} 中创建，之前为 null。 */
+    /** 「查看: X」切换按钮，用于在三个名单之间循环；initContent 中创建。 */
     private Button viewSwitcherButton;
 
     /**
      * 构造名单管理界面。
      *
-     * @param parent 父屏幕，用于返回，允许为 null
+     * @param parent 父屏幕，允许为 null；为 null 时关闭本屏幕会退回游戏界面
      */
     public RoomListsScreen(Screen parent) {
         super(Component.literal("名单管理"), parent);
     }
 
     /**
-     * 初始化界面内容。
+     * 填充内容区，契约见 EnderBaseScreen#initContent。
      *
-     * 先按需拉取状态，再创建列表控件（顶部 32 像素起、底部留 60 像素给按钮），最后放底栏按钮组。
+     * 打开时若仍处于加载态会先触发一次加载；列表覆盖 y=32 到 屏幕高度-60 的区域。
+     * 尾部件依次为「查看: X」切换按钮、「添加玩家」、「刷新」、「返回」。
+     *
+     * 本方法会被刷新与状态变更间接重复调用，必须保持幂等（每次重建控件）。
      */
     @Override
     protected void initContent() {
@@ -78,6 +81,7 @@ public class RoomListsScreen extends EnderBaseScreen {
             loadState();
         }
 
+        // 列表区域：顶部让出 32 像素给表头，底部让出 60 像素给尾部件
         int listTop = 32;
         int listBottom = this.height - 60;
         this.playerList = new PlayerList(this.minecraft, this.width, listBottom - listTop, listTop);
@@ -112,20 +116,16 @@ public class RoomListsScreen extends EnderBaseScreen {
     }
 
     /**
-     * 渲染界面。
+     * 渲染屏幕，契约见 EnderBaseScreen#render。
      *
-     * 在原版渲染之上画列表表头（玩家名 / 操作），加载中时额外画一行提示。
-     *
-     * @param guiGraphics 图形上下文，不能为 null
-     * @param mouseX 鼠标 X 坐标，单位为逻辑像素
-     * @param mouseY 鼠标 Y 坐标，单位为逻辑像素
-     * @param partialTick 当前帧的部分刻进度，取值 0.0..1.0
+     * 在父类绘制后追加表头「玩家名 / 操作」（表头行 y=20），加载中时在屏幕中央绘制「加载中...」。
      */
     @Override
     public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
         super.render(guiGraphics, mouseX, mouseY, partialTick);
         
         
+        // 表头：行宽 300 居中，玩家名列左缩进 10，操作列右移 240
         int headerY = 20; 
         int rowWidth = 300;
         int left = (this.width - rowWidth) / 2;
@@ -140,12 +140,6 @@ public class RoomListsScreen extends EnderBaseScreen {
     
     
 
-    /**
-     * 把标签页标识翻成界面显示名。
-     *
-     * @param tab 标签页标识，取值 whitelist / blacklist / mute_list；其它值原样返回
-     * @return 显示名称，永不为 null
-     */
     private String getTabName(String tab) {
         switch (tab) {
             case "whitelist": return "白名单";
@@ -156,11 +150,11 @@ public class RoomListsScreen extends EnderBaseScreen {
     }
 
     /**
-     * 切换标签页。
+     * 切换当前查看的名单类型。
      *
-     * 更新当前标签、刷新切换按钮文案并重新加载列表；状态对象不在本方法中重新拉取。
+     * 会同步更新切换按钮文案，并立即按新类型重建列表内容。
      *
-     * @param tab 目标标签页，取值 whitelist / blacklist / mute_list
+     * @param tab 目标名单类型，取值 whitelist / blacklist / mute_list
      */
     private void switchTab(String tab) {
         this.currentTab = tab;
@@ -171,9 +165,9 @@ public class RoomListsScreen extends EnderBaseScreen {
     }
 
     /**
-     * 重新加载玩家列表。
+     * 按当前名单类型重建列表条目。
      *
-     * 用当前状态与当前标签页重建列表条目；列表控件尚未创建时直接返回。
+     * 列表尚未创建时不做事；状态为 null 时列表会被清空。
      */
     private void reloadPlayerList() {
         if (this.playerList == null) {
@@ -183,10 +177,10 @@ public class RoomListsScreen extends EnderBaseScreen {
     }
 
     /**
-     * 从后端加载房间管理状态。
+     * 从后端拉取房间管理状态并刷新界面。
      *
-     * 无论成功或失败都会把 {@code isLoading} 置 false，并在主线程重载列表；
-     * 解析失败只打印堆栈，不改变已有状态。
+     * 请求失败时只结束加载态；请求成功时用 Gson 解析并重建列表。
+     * 解析异常会把堆栈打印到标准错误，但同样会结束加载态并刷新列表。
      */
     private void loadState() {
         EnderApiClient.getRoomManagementState().whenComplete((jsonStr, throwable) -> {
@@ -208,12 +202,11 @@ public class RoomListsScreen extends EnderBaseScreen {
     }
 
     /**
-     * 移除玩家。
+     * 从当前名单中移除指定玩家，并把整份状态回推后端。
      *
-     * 从当前标签页对应的数组中删除首个同名条目（精确匹配，区分大小写），
-     * 确有删除时才推回后端并刷新列表。
+     * 未命中该玩家时不产生任何写入与刷新。
      *
-     * @param name 玩家名称，不能为 null
+     * @param name 玩家名；stateJson 为 null 时直接返回
      */
     private void removePlayer(String name) {
         if (stateJson == null) return;
@@ -236,9 +229,7 @@ public class RoomListsScreen extends EnderBaseScreen {
     }
 
     /**
-     * 打开添加玩家对话框。
-     *
-     * 跳转到 {@link AddListEntryScreen}，回调里再调用 {@link #addPlayer}。
+     * 打开「添加名单条目」界面，并把回调结果写入对应名单。
      */
     private void openAddDialog() {
         if (this.minecraft != null) {
@@ -248,25 +239,25 @@ public class RoomListsScreen extends EnderBaseScreen {
         }
     }
     
+    
     /**
-     * 从列表中移除指定玩家的回调入口。
+     * 供列表条目回调的移除入口，转发给 removePlayer。
      *
-     * 供 {@link PlayerList.Entry} 的「移除」按钮调用，避免内部类直接持有私有方法引用。
+     * 保留为 protected 是为了让内部类 Entry 复用同一条移除路径。
      *
-     * @param name 玩家名称，不能为 null
+     * @param name 玩家名
      */
     protected void removePlayerFromList(String name) {
         removePlayer(name);
     }
 
     /**
-     * 添加玩家。
+     * 向指定名单添加玩家，并把整份状态回推后端。
      *
-     * 忽略大小写去重；已存在时不重复添加。新增成功后把整份状态推回后端、弹一条 toast，
-     * 并在类型与当前标签页不一致时把界面切到该类型。
+     * 已存在同名玩家时不重复添加；添加成功后弹出 Toast，并把当前查看的名单切到目标类型。
      *
-     * @param name 玩家名称，为 null 或空白时直接返回
-     * @param type 目标列表类型，取值 whitelist / blacklist / mute_list
+     * @param name 玩家名，为 null 或空白时直接返回
+     * @param type 目标名单类型，取值 whitelist / blacklist / mute_list
      */
     private void addPlayer(String name, String type) {
         if (stateJson == null || name == null || name.isBlank()) return;
@@ -281,7 +272,7 @@ public class RoomListsScreen extends EnderBaseScreen {
         EnderApiClient.updateRoomManagementState(stateJson.toString());
         
         
-        com.multiplayer.ender.client.ClientSetup.showToast(Component.literal("提示"), Component.literal("已添加玩家: " + name));
+        UserNotifierHolder.get().toast(Component.literal("提示"), Component.literal("已添加玩家: " + name));
 
         
         if (!this.currentTab.equals(type)) {
@@ -297,39 +288,42 @@ public class RoomListsScreen extends EnderBaseScreen {
     }
 
     /**
-     * 玩家列表控件。
+     * 玩家名单滚动列表。
      *
-     * 固定行高 24、行宽 300，滚动条贴右侧；条目内嵌「移除」按钮。
+     * 继承 ObjectSelectionList，每行显示一个玩家名与一个「移除」按钮；行宽固定 300 像素、
+     * 行高 24 像素（由构造参数传入）。列表内容只在 reloadFromState 中被整体重建。
+     *
+     * 线程安全性：只在客户端主线程使用。
      */
     class PlayerList extends ObjectSelectionList<PlayerList.Entry> {
         /**
-         * 构造玩家列表。
+         * 构造名单列表。
          *
-         * @param mc Minecraft 实例，不能为 null
-         * @param width 列表宽度，单位为逻辑像素
-         * @param height 列表可见高度，单位为逻辑像素
-         * @param top 列表顶部 Y 坐标，单位为逻辑像素
+         * @param mc 客户端实例，由外层传入，不能为 null
+         * @param width 列表宽度，单位像素
+         * @param height 列表高度，单位像素，决定可见条目数
+         * @param top 列表顶部 Y 坐标，单位像素
          */
         public PlayerList(Minecraft mc, int width, int height, int top) {
             super(mc, width, height, top, 24);
         }
-        
+
         /**
-         * 追加一个玩家条目。
+         * 追加一行玩家条目。
          *
-         * @param name 玩家名称，不能为 null
+         * @param name 玩家名，不能为 null
          */
         public void addPlayer(String name) {
             this.addEntry(new Entry(name));
         }
 
         /**
-         * 从状态重新加载列表。
+         * 按名单类型重建全部条目。
          *
-         * 先清空现有条目；状态为 null 或缺少对应标签页字段时列表为空。
+         * 会先清空现有条目；状态为 null 时列表保持为空。
          *
-         * @param state 房间管理状态，允许为 null
-         * @param tab 当前标签页字段名，取值 whitelist / blacklist / mute_list
+         * @param state 后端状态对象，允许为 null
+         * @param tab 名单类型键名，取值 whitelist / blacklist / mute_list
          */
         public void reloadFromState(JsonObject state, String tab) {
             this.clearEntries();
@@ -345,9 +339,7 @@ public class RoomListsScreen extends EnderBaseScreen {
         }
         
         /**
-         * 行宽，固定 300 逻辑像素。
-         *
-         * @return 行宽
+         * 行宽，固定 300 像素，契约见 ObjectSelectionList#getRowWidth。
          */
         @Override
         public int getRowWidth() {
@@ -355,9 +347,7 @@ public class RoomListsScreen extends EnderBaseScreen {
         }
 
         /**
-         * 滚动条位置，贴列表右缘内侧 6 像素。
-         *
-         * @return 滚动条 X 坐标，单位为逻辑像素
+         * 滚动条 X 坐标，贴行区域右缘再外扩 6 像素，契约见 ObjectSelectionList#getScrollbarPosition。
          */
         @Override
         protected int getScrollbarPosition() {
@@ -365,21 +355,22 @@ public class RoomListsScreen extends EnderBaseScreen {
         }
 
         /**
-         * 列表条目，左侧显示玩家名，右侧是「移除」按钮。
+         * 单行玩家条目。
          *
-         * 不响应整行点击：点击热区只交给「移除」按钮，避免误删。
+         * 左侧绘制玩家名，右侧绘制「移除」按钮。点击按钮会回调外层的移除逻辑；
+         * 点击行本身不做任何事，仅把事件交给父类。
          */
         public class Entry extends ObjectSelectionList.Entry<Entry> {
-            /** 玩家名称，非 null。 */
+            /** 玩家名，不能为 null。 */
             private final String name;
 
-            /** 移除按钮，非 null；点击后回调外层的移除逻辑。 */
+            /** 「移除」按钮，宽 50 像素；每帧渲染前按其所在行重新定位。 */
             private final Button removeBtn;
-            
+
             /**
              * 构造条目。
              *
-             * @param name 玩家名称，不能为 null
+             * @param name 玩家名，不能为 null
              */
             public Entry(String name) {
                 this.name = name;
@@ -387,20 +378,9 @@ public class RoomListsScreen extends EnderBaseScreen {
             }
 
             /**
-             * 渲染条目。
+             * 绘制条目，契约见 ObjectSelectionList.Entry#render。
              *
-             * 玩家名垂直居中靠左，移除按钮贴行右缘。
-             *
-             * @param guiGraphics 绘图上下文，不能为 null
-             * @param index 条目在列表中的索引
-             * @param top 行顶部 Y 坐标，单位为逻辑像素
-             * @param left 行左缘 X 坐标，单位为逻辑像素
-             * @param width 行宽，单位为逻辑像素
-             * @param height 行高，单位为逻辑像素
-             * @param mouseX 鼠标 X 坐标，单位为逻辑像素
-             * @param mouseY 鼠标 Y 坐标，单位为逻辑像素
-             * @param hovered 鼠标是否悬停在本行
-             * @param partialTick 当前帧的部分刻进度，取值 0.0..1.0
+             * 玩家名绘制在行内左侧（左内边距 10）；「移除」按钮贴行右缘内缩 55 像素处垂直居中。
              */
             @Override
             public void render(GuiGraphics guiGraphics, int index, int top, int left, int width, int height, int mouseX, int mouseY, boolean hovered, float partialTick) {
@@ -411,14 +391,9 @@ public class RoomListsScreen extends EnderBaseScreen {
             }
 
             /**
-             * 鼠标点击处理。
+             * 处理点击，契约见 ObjectSelectionList.Entry#mouseClicked。
              *
-             * 先给移除按钮，未被消费时才交给父类；整行本身不产生动作。
-             *
-             * @param mouseX 鼠标 X 坐标，单位为逻辑像素
-             * @param mouseY 鼠标 Y 坐标，单位为逻辑像素
-             * @param button 鼠标按键编号
-             * @return 事件被消费时返回 true
+             * 优先转发给「移除」按钮，未命中时再交给父类。
              */
             @Override
             public boolean mouseClicked(double mouseX, double mouseY, int button) {
@@ -427,11 +402,9 @@ public class RoomListsScreen extends EnderBaseScreen {
                 }
                 return super.mouseClicked(mouseX, mouseY, button);
             }
-            
+
             /**
-             * 无障碍朗读文本。
-             *
-             * @return 玩家名称，永不为 null
+             * 朗读文本，直接使用玩家名，契约见 ObjectSelectionList.Entry#getNarration。
              */
             @Override
             public Component getNarration() {
