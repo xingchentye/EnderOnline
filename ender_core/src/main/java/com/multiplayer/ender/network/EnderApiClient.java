@@ -987,22 +987,6 @@ public class EnderApiClient {
         }
     }
 
-    /**
-     * 扫描结果，用于在「找到房主」「见到主机名但缺 IP」「什么都没找到」之间传递中间态。
-     *
-     * 仅供 EnderApiClient 内部使用，禁止跨包引用。
-     */
-    private static class ScanResult {
-
-        /** 已解析出的房主地址；为 null 表示本轮未解析成功，此时 hostSeen 与 ipMissing 仍有意义。 */
-        InetSocketAddress address;
-
-        /** 是否至少见到过一个符合房主主机名格式的节点。 */
-        boolean hostSeen;
-
-        /** 是否出现过「主机名匹配但缺少 IP」的情形，用于区分「房间不存在」与「路由未就绪」。 */
-        boolean ipMissing;
-    }
 
     /**
      * 扫描 EasyTier 的对等节点，定位房主地址。
@@ -1013,42 +997,11 @@ public class EnderApiClient {
      * @return 扫描结果，永不为 null；未找到房主时 address 为 null
      */
     private static ScanResult scanForScaffoldingRemote() {
-        ScanResult result = new ScanResult();
         Map<String, String> hostnames = EasyTierManager.getInstance().getPeerHostnames();
         Map<String, String> ips = EasyTierManager.getInstance().getPeerIps();
-        for (Map.Entry<String, String> entry : hostnames.entrySet()) {
-            String hostname = entry.getValue();
-            if (hostname == null) {
-                continue;
-            }
-            String trimmed = hostname.trim();
-            LOGGER.info("Scanning host: {} -> {}", entry.getKey(), trimmed);
-            if (!trimmed.startsWith(SCAFFOLDING_PREFIX)) {
-                continue;
-            }
-            
-            result.hostSeen = true;
-            
-            LOGGER.info("Found scaffolding host: {} -> {}", entry.getKey(), trimmed);
-            
-            String portStr = trimmed.substring(SCAFFOLDING_PREFIX.length());
-            int port;
-            try {
-                port = Integer.parseInt(portStr);
-            } catch (Exception e) {
-                continue;
-            }
-            String ip = ips.get(entry.getKey());
-            if (ip == null || ip.isBlank()) {
-                
-                
-                
-                result.ipMissing = true;
-                LOGGER.warn("Host found but no IP for peer: {}", entry.getKey());
-                continue;
-            }
-            result.address = new InetSocketAddress(ip, port);
-            return result;
+        ScanResult result = ScaffoldingHostScanner.scan(hostnames, ips, SCAFFOLDING_PREFIX);
+        if (result.hostSeen) {
+            LOGGER.info("Found scaffolding host, address={}", result.address);
         }
         return result;
     }
