@@ -125,12 +125,21 @@ public final class Interpolator {
      * 四个通道（alpha、红、绿、蓝）各自独立插值后重新打包，因此不涉及色相路径选择，
      * 深色到浅色的过渡可能出现中间偏灰的现象，这是通道独立插值的固有结果。
      *
+     * 与数值版 lerp 不同，本方法会把插值因子钳到 [0, 1]、并把每个通道结果钳到 [0, 255]。
+     * 打包格式要求每个通道占满一个字节，越界分量会经位运算进位污染相邻通道，
+     * 因此颜色路径上的钳制是结构正确性的前提，而不是可选的行为修饰。
+     *
      * @param startColor 起始颜色，打包格式 0xAARRGGBB
      * @param endColor   结束颜色，打包格式 0xAARRGGBB
-     * @param t          插值因子，期望取值 [0, 1]
-     * @return 插值后的颜色，打包格式 0xAARRGGBB；每通道各取整一次，可能与逐通道精算值差 1
+     * @param t          插值因子；超出 [0, 1] 时按边界处理
+     * @return 插值后的颜色，打包格式 0xAARRGGBB，四个通道均落在 [0, 255]；
+     *         每通道各取整一次，可能与逐通道精算值差 1
      */
     public static int lerpColor(int startColor, int endColor, double t) {
+        // 打包结构要求每个通道落在 [0, 255]：越界分量会经位运算进位污染相邻通道
+        // （例如 red 超过 255 溢出到 alpha），得到结构上错误的 ARGB。
+        // 因此这里钳制两处：入参 t 抵抗超调缓动，逐通道结果抵抗越界端点或浮点误差。
+        double clampedT = clampT(t);
         int a1 = (startColor >> 24) & 0xFF;
         int r1 = (startColor >> 16) & 0xFF;
         int g1 = (startColor >> 8) & 0xFF;
@@ -141,10 +150,10 @@ public final class Interpolator {
         int g2 = (endColor >> 8) & 0xFF;
         int b2 = endColor & 0xFF;
 
-        int a = lerp(a1, a2, t);
-        int r = lerp(r1, r2, t);
-        int g = lerp(g1, g2, t);
-        int b = lerp(b1, b2, t);
+        int a = clamp(lerp(a1, a2, clampedT), 0, 255);
+        int r = clamp(lerp(r1, r2, clampedT), 0, 255);
+        int g = clamp(lerp(g1, g2, clampedT), 0, 255);
+        int b = clamp(lerp(b1, b2, clampedT), 0, 255);
 
         return (a << 24) | (r << 16) | (g << 8) | b;
     }
@@ -152,12 +161,14 @@ public final class Interpolator {
     /**
      * 带缓动函数的颜色插值。
      *
+     * 先把 t 经 easing 映射为缓动进度，再交给 {@link #lerpColor(int, int, double)}，
+     * 因此超调类缓动（elastic / back）的越界值会被该处的钳制吸收，不会产生越界通道。
+     *
      * @param startColor 起始颜色，打包格式 0xAARRGGBB
      * @param endColor   结束颜色，打包格式 0xAARRGGBB
      * @param t          插值因子，期望取值 [0, 1]
-     * @param easing     缓动函数，不能为 null；使用 elastic / back 系列时结果通道可能溢出 [0, 255]，
-     *                   调用方需改用会钳制的缓动或自行裁剪
-     * @return 插值后的颜色，打包格式 0xAARRGGBB
+     * @param easing     缓动函数，不能为 null
+     * @return 插值后的颜色，打包格式 0xAARRGGBB，四个通道均落在 [0, 255]
      */
     public static int lerpColor(int startColor, int endColor, double t, Easing.EasingFunction easing) {
         return lerpColor(startColor, endColor, easing.apply(t));

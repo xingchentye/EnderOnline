@@ -16,8 +16,9 @@ import java.util.function.Consumer;
  * 每个通道取值 0 到 255。插值对四个通道分别进行，alpha 同样参与过渡，因此可以直接做淡入淡出。
  *
  * 设计约束：
- * 1. 构造器不对分量做范围校验或钳制，除了 createAlphaAnimation 使用 0xFF 掩码外，
- *    超出 0 到 255 的分量会直接参与位运算并造成通道串位，详见 onUpdate 处的已知缺陷说明。
+ * 1. 越界分量在插值出口被钳制：{@link Interpolator#lerpColor(int, int, double)} 会把进度钳到
+ *    [0, 1]、把每个通道钳到 [0, 255]，因此超调缓动与越界端点都不会造成通道串位。
+ *    构造器仍不做范围校验——入参越界会先按位运算打包，再由插值出口钳制回来。
  * 2. 起始色与结束色可以在播放中通过 setColors 修改，改动只影响后续帧，不会重算已发出的颜色。
  * 3. 回调是唯一的颜色输出通道：本类不持有任何渲染目标，调用方必须在回调里把颜色写回自己的状态。
  * 4. 播放结束不会自动把颜色定格为 endColor，最后一帧仍取决于 update 的调用时机。
@@ -58,7 +59,9 @@ public class ColorAnimation extends Animation {
     /**
      * 创建颜色动画。
      *
-     * 四个分量不做范围校验，调用方必须自行保证在 0 到 255 之间。
+     * 构造器按位组合，不对四个分量做范围校验：传入超出 0 到 255 的取值会向相邻通道进位，
+     * 得到的分量本身就已经不是调用方给出的值。插值出口的钳制无法还原这一步的进位，
+     * 因此调用方必须自行保证分量合法。
      *
      * @param name 动画名称
      * @param duration 动画持续时间，单位秒；小于 0.001 时按 0.001 处理
@@ -75,7 +78,8 @@ public class ColorAnimation extends Animation {
     /**
      * 创建颜色动画，用 RGB 分量表示颜色。
      *
-     * 两个颜色的 alpha 固定为 0xFF（完全不透明），分量越界同样不做校验。
+     * 两个颜色的 alpha 固定为 0xFF（完全不透明）。分量按位组合而不做范围校验，
+     * 越界取值同样会向相邻通道进位，调用方必须自行保证分量合法。
      *
      * @param name 动画名称
      * @param duration 动画持续时间，单位秒；小于 0.001 时按 0.001 处理
@@ -95,7 +99,8 @@ public class ColorAnimation extends Animation {
     /**
      * 创建颜色动画，用 ARGB 分量表示颜色。
      *
-     * 分量不做掩码，传入大于 255 的值会向相邻通道进位。
+     * 分量不做掩码，传入大于 255 的值会向相邻通道进位（例如 red=300 会把 green 也抬高），
+     * 与打包版本构造器同一约束：调用方必须自行保证分量合法。
      *
      * @param name 动画名称
      * @param duration 动画持续时间，单位秒；小于 0.001 时按 0.001 处理
@@ -124,11 +129,7 @@ public class ColorAnimation extends Animation {
      */
     @Override
     protected void onUpdate(float easedProgress, float partialTick) {
-        // 使用插值器计算当前颜色
-        // FIXME(P3, 2026-10-06): Interpolator 的整型插值用 (int) 截断且不做钳制，
-        // 一是通道值向下取整导致低帧率下的颜色阶梯，二是配合 easeOutBack、elastic 等超调缓动时
-        // t 会大于 1，通道可超过 255 并进位污染相邻通道（例如 red 溢出到 alpha），得到错误的 ARGB。
-        // 修复方向：在插值内部钳制 t 与各通道结果。
+        // 插值出口负责钳制：超调缓动在这里被吸收，不会再产生越界的 ARGB。
         currentColor = Interpolator.lerpColor(startColor, endColor, easedProgress);
 
         // 触发颜色更新回调
