@@ -331,36 +331,35 @@ public final class Transition {
     }
 
     /**
-     * 创建闪烁动画（多次淡入淡出）
+     * 创建闪烁动画（多次淡入淡出）。
      *
      * 返回的序列未被启动，也未注册进 AnimationManager，需要调用方自行 start。
      *
+     * 明暗两端由 minAlpha 与 maxAlpha 给出：每一轮的暗端停在 minAlpha 而不是全透明。
+     * 子动画用 ValueAnimation 直接构造，因为 fadeIn / fadeOut 的端点固定为 0.0，无法落在任意暗端。
+     *
      * @param duration      单次闪烁持续时间（秒）
-     * @param blinkCount    闪烁次数
-     * @param minAlpha      最小透明度（0.0-1.0）
+     * @param blinkCount    闪烁次数；小于等于 0 时返回不含子动画的空序列
+     * @param minAlpha      最小透明度（0.0-1.0），不能大于 maxAlpha
      * @param maxAlpha      最大透明度（0.0-1.0）
      * @return 序列动画实例（需要后续添加到AnimationManager）
      */
-    // FIXME(P3, 2026-10-06): 参数 minAlpha 完全未被使用：两段子动画都以 maxAlpha 作为
-    // 亮端，fadeOut 从 maxAlpha 降到 0、fadeIn 再从 0 升回 maxAlpha，因此闪烁的暗端恒为 0 而不是
-    // minAlpha，调用方传 minAlpha=0.3 仍会闪到全透明。修复方向：暗端改用 minAlpha。
     public static AnimationSequence blink(float duration, int blinkCount, float minAlpha, float maxAlpha) {
         AnimationSequence sequence = new AnimationSequence("blink");
+        float half = duration / 2.0f;
 
         for (int i = 0; i < blinkCount; i++) {
-            // 从 maxAlpha 淡出到 0（暗端不是 minAlpha，见上方已知缺陷说明）
-            sequence.addAnimation(fadeOut(duration / 2, maxAlpha));
-            // 从 0 淡入到 maxAlpha
-            sequence.addAnimation(fadeIn(duration / 2, maxAlpha));
+            // 从 maxAlpha 淡出到 minAlpha
+            sequence.addAnimation(new ValueAnimation("blink_out", half, maxAlpha, minAlpha));
+            // 从 minAlpha 淡入到 maxAlpha
+            sequence.addAnimation(new ValueAnimation("blink_in", half, minAlpha, maxAlpha));
         }
 
         return sequence;
     }
 
     /**
-     * 创建标准闪烁动画（3次闪烁；暗端参数当前不生效，实际在 0 到 1.0 之间闪烁）。
-     *
-     * 详见 blink 重载处的已知缺陷说明。
+     * 创建标准闪烁动画（3 次闪烁，暗端停在 0.3 而不是全透明）。
      *
      * @param duration 单次闪烁持续时间（秒）
      * @return 序列动画实例，未被启动，需要调用方自行 start
@@ -373,7 +372,8 @@ public final class Transition {
      * 创建脉动动画（循环缩放）
      *
      * pulseCount 小于等于 0 时按「无限」处理，此时只生成一轮子动画并置循环标志；
-     * 返回的序列未被启动，需要调用方自行 start（循环能否生效见 AnimationSequence 的说明）。
+     * 返回的序列未被启动，需要调用方自行 start。
+     * 循环标志直接写在父类字段上，因此无限脉动会真正反复播放而不是只走一轮。
      *
      * @param duration    单次脉动持续时间（秒）
      * @param pulseCount  脉动次数（0表示无限）

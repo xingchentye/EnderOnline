@@ -21,7 +21,7 @@ import java.util.function.Consumer;
  * 2. fadeIn、fadeOut、animateValue、animateColor 会立即 start 动画；
  *    而 Transition 的同名方法只构造不启动，两处语义不同，互相替换时需注意。
  * 3. createXxxAnimation 系列返回未启动的序列或动画，由调用方决定何时 start 与如何复用。
- * 4. stopAnimation 系列只做移除，不触发停止回调，详见该方法处的已知缺陷说明。
+ * 4. stopAnimation 系列会先调用 Animation.stop（触发停止回调、并连带停止序列的子动画），再兜底移除。
  * 5. 本类不可实例化，构造器私有。
  *
  * 线程安全性：本类无状态，静态方法可并发调用；但所有调用都会落到单例 AnimationManager 及其持有的
@@ -438,22 +438,24 @@ public final class UIAnimationUtils {
     /**
      * 停止指定动画。
      *
-     * 仅按 ID 从管理器列表移除，不触发停止回调。
+     * 先按 ID 取出实例并调用 {@link Animation#stop()}：stop 会触发停止回调、把动画置为非活动，
+     * 并对序列一并停止其子动画（子动画是各自独立注册进管理器的，只移除序列会留下它们继续跑）。
+     * 随后再兜底按 ID 移除一次，覆盖「取不到实例但仍残留在列表中」的边界。
      *
      * @param animationId 目标动画 ID；不存在时静默忽略
      */
-    // FIXME(P3, 2026-10-06): 这里只调用 removeAnimation，绕过了 Animation.stop，
-    // 目标动画自身仍停留在 active=true、completed=false，既不会再被推进也不会触发停止回调；
-    // 若目标是 AnimationSequence，其子动画已被单独注册进管理器，会继续独立跑完。
-    // 修复方向：先按 ID 取出实例调用 stop，再兜底移除。
     public static void stopAnimation(String animationId) {
+        Animation animation = AnimationManager.getInstance().getAnimation(animationId);
+        if (animation != null) {
+            animation.stop();
+        }
         AnimationManager.getInstance().removeAnimation(animationId);
     }
 
     /**
      * 若指定动画正在运行则停止它。
      *
-     * 与先调用 isAnimationRunning 再调用 stopAnimation 等价，同样是仅移除、不触发停止回调。
+     * 与先调用 isAnimationRunning 再调用 stopAnimation 等价，同样会触发停止回调。
      *
      * @param animationId 目标动画 ID；不存在时静默忽略
      */
