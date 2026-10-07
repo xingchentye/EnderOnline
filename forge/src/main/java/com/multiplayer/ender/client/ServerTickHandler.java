@@ -45,7 +45,7 @@ public class ServerTickHandler {
         if (event.phase == TickEvent.Phase.END) {
              MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
              if (server != null) {
-                 RoomHostLogic.onServerTick(server);
+                 RoomHostLogic.getInstance().onServerTick(server);
              }
         }
     }

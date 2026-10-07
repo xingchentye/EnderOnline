@@ -44,16 +44,38 @@ import net.minecraft.world.level.GameRules;
  *
  * 线程安全性：onServerTick 由 ServerTickHandler 在服务器主线程调用；applyState 会改写
  * 游戏规则、踢出玩家、切换游戏模式，因此同样只允许在服务器线程调用，本类不做内部加锁。
- * tickCounter 与 initialized 是静态可变状态，同样只在服务器线程访问。
+ * tickCounter 与 initialized 是实例字段，与单例一样只在服务器线程访问。
  *
  * @see ServerTickHandler
  */
 public class RoomHostLogic {
+    /** 进程内唯一实例，仅在 {@link #getInstance()} 的同步方法内赋值。 */
+    private static RoomHostLogic instance;
+
     /** tick 计数器，非负递增，每 20 取模判定一次执行；跨世界保留，不随托管状态复位。 */
-    private static int tickCounter = 0;
+    private int tickCounter = 0;
 
     /** 本次托管周期是否已做过初始上报；离开 HOSTING 状态时复位为 false。 */
-    private static boolean initialized = false;
+    private boolean initialized = false;
+
+    /**
+     * 获取进程内唯一实例。
+     *
+     * 门面保持静态是为了让两个加载器的 ServerTickHandler 有统一入口；可变状态已归实例，
+     * 符合 ADR-05「可变状态归实例」的约束。
+     *
+     * @return 单例实例，永不为 null
+     */
+    public static synchronized RoomHostLogic getInstance() {
+        if (instance == null) {
+            instance = new RoomHostLogic();
+        }
+        return instance;
+    }
+
+    /** 私有构造器，单例只能由 {@link #getInstance()} 创建。 */
+    private RoomHostLogic() {
+    }
 
     /**
      * 服务器 tick 回调，每 20 tick 真正执行一次。
@@ -65,7 +87,7 @@ public class RoomHostLogic {
      *
      * @param server 当前 Minecraft 服务器实例，不能为 null（由 ServerTickHandler 保证）
      */
-    public static void onServerTick(MinecraftServer server) {
+    public void onServerTick(MinecraftServer server) {
         if (tickCounter++ % 20 != 0) return; 
 
         if (EnderApiClient.getCurrentState() != EnderApiClient.State.HOSTING) {
