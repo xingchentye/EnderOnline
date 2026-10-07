@@ -112,14 +112,16 @@ public abstract class Animation {
             return;
         }
 
-        // 更新已过去时间
-        // FIXME(P3, 2026-10-06): deltaTime 来自墙上时钟差值，系统时钟回拨时会变成负数，
-        // 把 elapsedTime 拉成负值，而 progress 只钳上界，缓动函数随即收到越界输入。
-        // 修复方向：改用单调时钟，并在取进度时把两端都钳到 [0, 1]。
-        elapsedTime += deltaTime;
+        // 更新已过去时间。
+        // deltaTime 由调用方给出，墙上时钟回拨时会为负；这里先把时间增量钳到非负，
+        // 保证 elapsedTime 单调不减，而不是把负值累积进去等后面兜底。
+        if (deltaTime > 0.0f) {
+            elapsedTime += deltaTime;
+        }
 
-        // 计算进度；只保证不超过 1.0，下界未钳制（见上方已知缺陷说明）
-        progress = Math.min(1.0f, elapsedTime / duration);
+        // 进度双向钳制到 [0, 1]：上界防止越界完成判定，下界防止缓动函数收到负输入
+        // （elastic、back 一类超调缓动对越界输入会给出远离预期的结果）。
+        progress = Math.min(1.0f, Math.max(0.0f, elapsedTime / duration));
 
         // 应用缓动函数
         float easedProgress = (float) easingFunction.apply(progress);

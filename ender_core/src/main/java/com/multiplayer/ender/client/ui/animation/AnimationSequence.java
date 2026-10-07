@@ -39,13 +39,6 @@ public class AnimationSequence extends Animation {
     /** 当前子动画下标，正常落在 [0, animations.size())；播完或清空后可能等于子动画数量。 */
     private int currentIndex = 0;
 
-    // FIXME(P3, 2026-10-06): 本字段遮蔽了父类 Animation.loop，而 setLoop 只写本字段、
-    // 不调用 super.setLoop，于是父类 Animation.update 的循环判定永远看到 false：序列在子动画播完第一遍时
-    // 就被父类置为 completed 并转为非活动，本类 onUpdate 里的循环重置分支随即被覆盖，循环不会生效。
-    // 修复方向：删除本字段，setLoop/isLoop 直接转发父类字段。
-    /** 是否循环播放；遮蔽父类同名字段，行为受限，见上方已知缺陷说明。 */
-    private boolean loop = false;
-
     /** 是否并行播放；当前没有任何实现读取，序列恒为串行。 */
     private boolean parallel = false; // 是否并行播放（暂不支持）
 
@@ -188,8 +181,8 @@ public class AnimationSequence extends Animation {
                 if (currentIndex >= animations.size()) {
                     // 序列完成
                     if (loop) {
-                        // 循环播放：重置索引
-                        // 注意：父类看不到本类自己的 loop 字段，该分支随后会被父类的完成判定覆盖
+                        // 循环播放：重置索引。
+                        // 父类读的是同一个字段（本类不再另立字段），因此这里的重置不会被完成判定覆盖。
                         currentIndex = 0;
                         startCurrentAnimation();
                     } else {
@@ -310,18 +303,20 @@ public class AnimationSequence extends Animation {
     /**
      * 设置序列是否循环。
      *
-     * 只写本类字段，不同步父类 Animation.loop（见字段处已知缺陷说明），
-     * 因此当前实现下该开关无法真正让序列循环。
+     * 转发给父类字段。父类 {@code Animation.update} 的循环判定读的正是该字段，
+     * 因此这里必须委托而不能另立字段，否则父类会把序列提前置为完成。
      *
      * @param loop true 表示播完一轮后从头再来
      */
+    @Override
     public void setLoop(boolean loop) {
-        this.loop = loop;
+        super.setLoop(loop);
     }
 
-    /** 检查序列是否被标记为循环；取值可能与父类 Animation.isLoop 不一致，见字段处已知缺陷说明。 */
+    /** 检查序列是否被标记为循环；直接取父类字段，与 {@link Animation#isLoop()} 恒一致。 */
+    @Override
     public boolean isLoop() {
-        return loop;
+        return super.isLoop();
     }
 
     /**
@@ -403,7 +398,7 @@ public class AnimationSequence extends Animation {
     /**
      * 创建并开始一个循环动画序列。
      *
-     * 注意：受本类 loop 字段遮蔽父类字段的影响，当前实现下循环不会真正生效，见字段处已知缺陷说明。
+     * 循环开关直接写在父类字段上，因此序列会真正从头重播而不是在首轮结束时停止。
      *
      * @param name 序列名称
      * @param animations 子动画数组，按传入顺序串联；数组本身不能为 null，元素允许为 null

@@ -39,8 +39,8 @@ public class AnimationManager {
     /** 全局暂停标志；true 时 update 直接返回，不再推进任何动画。 */
     private boolean paused = false;
 
-    /** 上次 update 使用的墙上时钟毫秒值，用于换算 deltaTime；暂停与全局恢复期间不刷新。 */
-    private long lastUpdateTime = System.currentTimeMillis();
+    /** 上次 update 使用的单调时钟纳秒值，用于换算 deltaTime；暂停与全局恢复期间不刷新。 */
+    private long lastUpdateTime = System.nanoTime();
 
     /** 单例实例，仅在 getInstance 的同步方法内被赋值。 */
     private static AnimationManager instance;
@@ -66,8 +66,9 @@ public class AnimationManager {
     /**
      * 推进所有活动动画一帧。
      *
-     * 时间增量取自 System.currentTimeMillis 与上次更新的差值并换算为秒，再钳到 0.1 秒上限，
-     * 避免长卡顿或恢复后一次性跳跃。全局暂停时直接返回，且不刷新时间基准，
+     * 时间增量取自单调时钟 {@code System.nanoTime()} 与上次更新的差值并换算为秒，
+     * 再钳到 [0, 0.1] 秒：上限避免长卡顿或恢复后一次性跳跃，下限兜底非单调时钟或极端调度，
+     * 避免负增量让动画倒退。全局暂停时直接返回，且不刷新时间基准，
      * 因此恢复后的第一帧增量同样受 0.1 秒钳制。
      *
      * 副作用：会触发完成回调，并移除已完成且 shouldAutoRemove 为 true 的动画。
@@ -79,21 +80,45 @@ public class AnimationManager {
             return;
         }
 
-        // FIXME(P3, 2026-10-06): 时间源是墙上时钟 System.currentTimeMillis()，受系统校时
-        // 与用户手改时钟影响；时钟回拨会让 deltaTime 变成负数，而下方只做了 0.1 秒的上限钳制、
-        // 没有下限，负增量会经 Animation.update 直接吃掉动画时间。应改用 System.nanoTime()。
-        long currentTime = System.currentTimeMillis();
-        float deltaTime = (currentTime - lastUpdateTime) / 1000.0f; // 转换为秒
+        long currentTime = System.nanoTime();
+        float deltaTime = (currentTime - lastUpdateTime) / 1_000_000_000.0f;
         lastUpdateTime = currentTime;
 
-        // 限制deltaTime避免卡顿导致的跳帧
-        deltaTime = Math.min(deltaTime, 0.1f);
+        advance(deltaTime, partialTick);
+    }
 
-        // NOTE: partialTick 只是透传，动画时间完全由真实流逝时间驱动，因此本方法的调用频率
+    /**
+     * 按调用方给定的时间增量推进所有活动动画一帧。
+     *
+     * 与 {@link #update(float)} 的区别只在于时间增量的来源：本方法不读内部时钟，
+     * 因此离线渲染、逐帧定步长推进与倍速播放都能得到与预期一致的节奏。
+     * 传 0 或负数等价于不推进时间，但仍会执行完成回调与回收，与 {@link #update(float)} 一致。
+     *
+     * 副作用与 {@link #update(float)} 相同。注意本方法不刷新内部时间基准，
+     * 与 {@link #update(float)} 混用会让后者下一帧的增量出现跳变。
+     *
+     * @param deltaTime 时间增量，单位秒；大于 0.1 时按 0.1 处理，小于 0 时按 0 处理
+     */
+    public void manualUpdate(float deltaTime) {
+        advance(deltaTime, 0.0f);
+    }
+
+    /**
+     * 共用的推进实现。
+     *
+     * 时间增量在这里统一钳制，保证两个公开入口对越界增量的处理完全一致。
+     *
+     * @param deltaTime 时间增量，单位秒
+     * @param partialTick 当前渲染帧的部分刻
+     */
+    private void advance(float deltaTime, float partialTick) {
+        // NOTE: partialTick 只是透传，动画时间完全由传入增量驱动，因此调用频率
         // 直接决定动画的推进步长；按游戏刻调用会让动画呈刻粒度，逐帧调用才会平滑。
+        float clamped = Math.min(Math.max(deltaTime, 0.0f), 0.1f);
+
         for (Animation animation : activeAnimations) {
             if (animation.isActive()) {
-                animation.update(deltaTime, partialTick);
+                animation.update(clamped, partialTick);
 
                 // 检查动画是否已完成
                 if (animation.isCompleted()) {
@@ -283,20 +308,6 @@ public class AnimationManager {
     public void reset() {
         clearAllAnimations();
         paused = false;
-        lastUpdateTime = System.currentTimeMillis();
-    }
-
-    /**
-     * 手动触发一次更新，不依赖游戏刻。
-     *
-     * 供离线渲染或测试使用，参数 partialTick 固定传 0。
-     *
-     * @param deltaTime 期望的时间增量，单位秒；当前实现忽略该参数，实际增量仍由内部时钟差值决定
-     */
-    // FIXME(P3, 2026-10-06): deltaTime 参数未被使用，方法体只把 partialTick 置 0 后
-    // 仍走 update 内部的墙上时钟差值，调用方给出的时间增量被完全忽略；离线渲染、逐帧定步长推进
-    // 与倍速播放都会得到与预期不符的节奏。修复方向是让 update 接受外部 deltaTime 作为权威时间源。
-    public void manualUpdate(float deltaTime) {
-        update(0.0f); // partialTick 置 0；时间增量由 update 内部按墙上时钟重新计算
+        lastUpdateTime = System.nanoTime();
     }
 }
