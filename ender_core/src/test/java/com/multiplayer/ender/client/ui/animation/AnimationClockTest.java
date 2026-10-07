@@ -141,4 +141,68 @@ class AnimationClockTest {
 
         assertFalse(sequence.isActive(), "非循环序列播完应转为非活动");
     }
+
+    @Test
+    @DisplayName("AnimationManager.resumeAll：只恢复运行过的动画，不误恢复调用方单独暂停的")
+    void resumeAllRestoresOnlyPreviouslyRunning() {
+        AnimationManager manager = AnimationManager.getInstance();
+        ValueAnimation running = new ValueAnimation("running", 5.0f, 0.0f, 1.0f);
+        running.setAutoRemove(false);
+        ValueAnimation manuallyPaused = new ValueAnimation("caller-paused", 5.0f, 0.0f, 1.0f);
+        manuallyPaused.setAutoRemove(false);
+        running.start();
+        manuallyPaused.start();
+        manuallyPaused.pause();
+
+        manager.pauseAll();
+        assertTrue(running.isPaused(), "全局暂停应暂停原本在运行的动画");
+        assertTrue(manuallyPaused.isPaused(), "全局暂停期间两者都应处于暂停");
+
+        manager.resumeAll();
+        assertFalse(running.isPaused(), "原本在运行的动画应被恢复");
+        assertTrue(manuallyPaused.isPaused(), "调用方单独暂停的动画必须保持暂停——这正是原缺陷失效之处");
+    }
+
+    @Test
+    @DisplayName("AnimationManager.pauseAll/resumeAll：成对调用之外是空操作，快照不被覆盖")
+    void pauseAllIsIdempotent() {
+        AnimationManager manager = AnimationManager.getInstance();
+        ValueAnimation first = new ValueAnimation("first", 5.0f, 0.0f, 1.0f);
+        first.setAutoRemove(false);
+        ValueAnimation second = new ValueAnimation("second", 5.0f, 0.0f, 1.0f);
+        second.setAutoRemove(false);
+        first.start();
+        second.start();
+        second.pause();
+
+        // 首次暂停记录快照：second 是唯一在暂停前就被调用方暂停的动画
+        manager.pauseAll();
+        // 第二次调用必须早退，否则会用「此刻全部暂停」覆盖快照，导致 first 永远恢复不了
+        manager.pauseAll();
+        manager.resumeAll();
+
+        assertFalse(first.isPaused(), "首次快照中的 first 应被恢复——重复 pauseAll 不得覆盖快照");
+        assertTrue(second.isPaused(), "暂停前就被调用方暂停的 second 应保持暂停");
+
+        // 未处于全局暂停时重复调用是空操作
+        manager.resumeAll();
+        assertFalse(first.isPaused(), "重复 resumeAll 不应改变状态");
+    }
+
+    @Test
+    @DisplayName("Animation.paused：仅由 pause/resume 驱动，start 会清掉既有暂停")
+    void pausedTracksCallerIntent() {
+        ValueAnimation animation = new ValueAnimation("intent", 1.0f, 0.0f, 1.0f);
+        animation.start();
+        animation.pause();
+        assertTrue(animation.isPaused(), "pause 后应处于暂停");
+
+        animation.update(0.5f, 0.0f);
+        assertEquals(0.0f, animation.getElapsedTime(), 0.0001f, "暂停期间 update 不得推进时间");
+
+        animation.resume();
+        assertFalse(animation.isPaused(), "resume 后应解除暂停");
+        animation.update(0.5f, 0.0f);
+        assertEquals(0.5f, animation.getElapsedTime(), 0.0001f, "恢复后 update 应重新推进时间");
+    }
 }

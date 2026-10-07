@@ -217,10 +217,11 @@ public abstract class Animation {
      * 恢复动画。
      *
      * 仅在活动且已暂停时生效。
+     *
+     * 语义约定：{@code paused} 表示**调用方的暂停意图**，不掺入管理器级状态。
+     * 管理器暂停时另存快照（见 {@code AnimationManager.pausedBeforeGlobalPause}），
+     * 因此全局恢复不会误恢复调用方单独暂停过的动画。
      */
-    // FIXME(P3, 2026-10-06): paused 一个标志同时承担「调用方暂停」与「管理器暂停」两种语义，
-    // 因此 AnimationManager.resumeAll 会把调用方此前单独暂停的动画一并恢复，丢失原有暂停状态。
-    // 修复方向：为管理器级暂停引入独立标志，或在管理器内保存恢复前的逐动画暂停快照。
     public void resume() {
         if (active && paused) {
             paused = false;

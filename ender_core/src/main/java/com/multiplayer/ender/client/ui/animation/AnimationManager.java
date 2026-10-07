@@ -9,7 +9,9 @@ package com.multiplayer.ender.client.ui.animation;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CopyOnWriteArraySet;
 
 /**
  * 动画管理器，进程内唯一的动画调度入口。
@@ -38,6 +40,14 @@ public class AnimationManager {
 
     /** 全局暂停标志；true 时 update 直接返回，不再推进任何动画。 */
     private boolean paused = false;
+
+    /**
+     * 全局暂停发生时已被调用方单独暂停的动画快照。
+     *
+     * 非空即表示管理器级暂停生效；{@link #resumeAll()} 只恢复「全局暂停之前就在跑」的动画，
+     * 因此本快照是恢复的依据。用写时复制集合，避免遍历期间被列表增删干扰。
+     */
+    private final Set<Animation> pausedBeforeGlobalPause = new CopyOnWriteArraySet<>();
 
     /** 上次 update 使用的单调时钟纳秒值，用于换算 deltaTime；暂停与全局恢复期间不刷新。 */
     private long lastUpdateTime = System.nanoTime();
@@ -195,8 +205,21 @@ public class AnimationManager {
      * 全局暂停，并逐个暂停当前持有的动画。
      *
      * 管理器标志与动画标志各自独立：即使全局标志为 true，未在列表中的动画也不会被暂停。
+     *
+     * 暂停前会记录哪些动画已被调用方单独暂停（见 {@link #pausedBeforeGlobalPause}），
+     * 使 {@link #resumeAll()} 能精确还原，而不是把所有动画一律恢复。
+     *
+     * 幂等性：已处于全局暂停时重复调用是空操作，不会覆盖首次记录的快照。
      */
     public void pauseAll() {
+        if (paused) {
+            return;
+        }
+        for (Animation animation : activeAnimations) {
+            if (animation.isPaused()) {
+                pausedBeforeGlobalPause.add(animation);
+            }
+        }
         paused = true;
         for (Animation animation : activeAnimations) {
             animation.pause();
@@ -204,16 +227,27 @@ public class AnimationManager {
     }
 
     /**
-     * 全局恢复，并逐个恢复当前持有的动画。
+     * 全局恢复，并恢复此前在运行的动画。
      *
-     * 恢复时会一并解除调用方此前对单个动画的暂停（paused 是共享标志），
-     * 因此本方法不适合「只解除管理器级暂停」的场景。
+     * 只恢复「本次全局暂停之前未被调用方暂停」的动画：全局暂停前就被单独暂停的动画保持暂停，
+     * 由调用方自行 {@link Animation#resume()}。这是与 pauseAll 的对称还原，不改变
+     * {@link Animation#isPaused()} 的语义（它始终表示调用方的暂停意图）。
+     *
+     * 边界：全局暂停期间新加入的动画不在快照中，全局恢复时会被一并恢复。
+     *
+     * 幂等性：未处于全局暂停时重复调用是空操作。
      */
     public void resumeAll() {
+        if (!paused) {
+            return;
+        }
         paused = false;
         for (Animation animation : activeAnimations) {
-            animation.resume();
+            if (!pausedBeforeGlobalPause.contains(animation)) {
+                animation.resume();
+            }
         }
+        pausedBeforeGlobalPause.clear();
     }
 
     /**
@@ -277,21 +311,16 @@ public class AnimationManager {
     /**
      * 设置全局暂停状态，并同步设置当前持有的全部动画。
      *
-     * 解除暂停时不区分暂停来源：paused 标志同时承担管理器级与调用方级暂停，
-     * 因此本方法会把调用方单独暂停的动画一并恢复。
+     * 语义与 {@link #pauseAll()} / {@link #resumeAll()} 完全一致：暂停前记录调用方已暂停的动画，
+     * 恢复时只还原此前在运行的那些，不会把调用方单独暂停的动画一并恢复。
      *
-     * @param paused true 表示暂停全部动画；false 表示恢复
+     * @param paused true 表示暂停全部动画；false 表示恢复到本次全局暂停之前的状态
      */
     public void setPaused(boolean paused) {
-        this.paused = paused;
         if (paused) {
-            for (Animation animation : activeAnimations) {
-                animation.pause();
-            }
+            pauseAll();
         } else {
-            for (Animation animation : activeAnimations) {
-                animation.resume();
-            }
+            resumeAll();
         }
     }
 
@@ -308,6 +337,7 @@ public class AnimationManager {
     public void reset() {
         clearAllAnimations();
         paused = false;
+        pausedBeforeGlobalPause.clear();
         lastUpdateTime = System.nanoTime();
     }
 }
